@@ -44,6 +44,7 @@ export interface Point {
   AirTempK: number;
   ProcessTempK: number;
   SpeedRpm: number;
+  alarm: boolean; // the reading was in ALARM: drawn as a red marker on the charts
 }
 
 export interface AlarmEvent {
@@ -81,9 +82,13 @@ export interface View {
   alarms: AlarmEvent[]; // newest first
   latched: LatchedAlarm | null;
   liveAgeMs: number | null; // edge app -> browser, last non-buffered message
+  missing: number; // readings never received: gaps in seq (should stay 0 through an outage)
+  bufferedReceived: number; // readings delivered late from the edge app's buffer
 }
 
-export const emptyView: View = { latest: null, points: [], alarms: [], latched: null, liveAgeMs: null };
+export const emptyView: View = {
+  latest: null, points: [], alarms: [], latched: null, liveAgeMs: null, missing: 0, bufferedReceived: 0,
+};
 
 function updateLatch(latched: LatchedAlarm | null, m: Telemetry): LatchedAlarm | null {
   if (m.state === "ALARM") {
@@ -124,6 +129,7 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
     AirTempK: s.AirTempK,
     ProcessTempK: s.ProcessTempK,
     SpeedRpm: s.SpeedRpm,
+    alarm: m.state === "ALARM",
   };
   const points = [...view.points, point].slice(-HISTORY_POINTS);
 
@@ -148,5 +154,12 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
 
   // Buffered messages are late on purpose; their age says nothing about the live latency.
   const liveAgeMs = m.buffered ? view.liveAgeMs : Math.max(0, nowMs - Date.parse(m.ts));
-  return { latest: m, points, alarms, latched: updateLatch(view.latched, m), liveAgeMs };
+  // A jump forward in seq = readings that never arrived. A jump backwards is a PLC restart, not a loss.
+  const prevSeq = view.latest?.seq;
+  const gap = prevSeq != null && m.seq > prevSeq + 1 ? m.seq - prevSeq - 1 : 0;
+  return {
+    latest: m, points, alarms, latched: updateLatch(view.latched, m), liveAgeMs,
+    missing: view.missing + gap,
+    bufferedReceived: view.bufferedReceived + (m.buffered ? 1 : 0),
+  };
 }

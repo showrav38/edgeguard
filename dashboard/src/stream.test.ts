@@ -66,6 +66,28 @@ describe("addTelemetry", () => {
   });
 });
 
+describe("delivery counters", () => {
+  it("counts seq gaps as missing, but not a restart (seq going back)", () => {
+    let v = emptyView;
+    for (const seq of [1, 2, 5, 6, 1, 2]) v = addTelemetry(v, msg(seq), 0);
+    expect(v.missing).toBe(2); // 3 and 4
+  });
+
+  it("counts readings delivered from the buffer", () => {
+    let v = addTelemetry(emptyView, msg(1), 0);
+    v = addTelemetry(v, { ...msg(2), buffered: true }, 0);
+    v = addTelemetry(v, { ...msg(3), buffered: true }, 0);
+    expect(v.bufferedReceived).toBe(2);
+    expect(v.missing).toBe(0);
+  });
+
+  it("marks alarm readings on the chart points", () => {
+    let v = addTelemetry(emptyView, msg(1, "OK"), 0);
+    v = addTelemetry(v, msg(2, "ALARM"), 0);
+    expect(v.points.map((p) => p.alarm)).toEqual([false, true]);
+  });
+});
+
 describe("alarm latch", () => {
   const feed = (v: View, states: Telemetry["state"][], start: number) =>
     states.reduce((acc, st, i) => addTelemetry(acc, msg(start + i, st), 0), v);

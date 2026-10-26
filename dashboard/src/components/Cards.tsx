@@ -2,6 +2,7 @@
 import { FAILURE_TYPES, pct, SIGNALS, signalValue } from "../format";
 import { formatDuration, type LatchedAlarm } from "../stream";
 import type { Telemetry } from "../types";
+import { GLOSSARY, Help } from "./Help";
 import { ToneLabel, type Tone } from "./Tone";
 
 const STATE_TONE: Record<string, Tone> = { OK: "ok", WARNING: "warn", ALARM: "bad" };
@@ -46,8 +47,8 @@ export function StatusCard({ m, latched, now, onAck, threshold, costRatio }: {
       <div className="big-state"><ToneLabel tone={tone}>{label}</ToneLabel></div>
       {latched && <AlarmLatch latched={latched} now={now} onAck={onAck} />}
       <dl className="facts">
-        <div><dt>Current failure risk</dt><dd className="num">{pct(m.risk)}</dd></div>
-        <div><dt>Alarm threshold</dt><dd className="num">{threshold != null ? pct(threshold) : "–"}</dd></div>
+        <div><dt>Current failure risk <Help term="Risk">{GLOSSARY.risk}</Help></dt><dd className="num">{pct(m.risk)}</dd></div>
+        <div><dt>Alarm threshold <Help term="Alarm threshold">{GLOSSARY.threshold(threshold, costRatio)}</Help></dt><dd className="num">{threshold != null ? pct(threshold) : "–"}</dd></div>
         <div><dt>Most likely failure</dt>
           <dd>{FAILURE_TYPES[latched?.peak.failure_type ?? m.failure_type] ?? m.failure_type}</dd></div>
         <div><dt>Reading</dt><dd className="num">seq {m.seq}{m.buffered ? " (buffered)" : ""}</dd></div>
@@ -106,7 +107,7 @@ export function DriftBanner({ m }: { m: Telemetry | null }) {
   const names = m.drift_signals.map((s) => SIGNALS[s]?.label ?? s).join(", ");
   return (
     <div className="banner banner-warn" role="alert">
-      <ToneLabel tone="warn">Drift</ToneLabel>
+      <span><ToneLabel tone="warn">Drift</ToneLabel> <Help term="Drift">{GLOSSARY.drift}</Help></span>
       <span>
         Live data has moved away from the training data ({names}; shift {m.drift_score?.toFixed(1)} std).
         Predictions may be unreliable.

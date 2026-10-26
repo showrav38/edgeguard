@@ -224,3 +224,13 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Why:** with a dev stack running, the checks read the other edge app's messages, sent it demo commands, two clients
   with the same id kicked each other off the broker, and two edge apps sharing one outbox file sent each other's rows
   (duplicates). Each was seen as a check failure. A real site would also need unique client ids per edge device.
+
+### D-24 — Two views: Operator (default, plain words) and Engineer (all numbers) (review after redesign)
+- **Decision:** a toggle switches between an Operator view (traffic light + one sentence, "what to do" + one-sentence
+  reason, risk gauge, risk and tool-wear charts with alarm dots, alarm history as sentences, "?" on every technical
+  term) and the Engineer view (the M5 layout). A 4-step guided demo drives the existing `drift`/`speed`/`outage`
+  commands and confirms each step live (alarm raised, drift detected, readings lost = gaps in seq).
+- **Alternatives:** one dashboard for everyone (too dense for a visitor, too thin for an engineer); a separate page.
+- **Why:** the technician needs the action in 5 seconds, the engineer needs latency/buffer/drift numbers. Same data,
+  same alarm latch. Limits: the reason sentence uses only the top explanation factor; "usual range" = training
+  10th–90th percentile; the gauge spans 0 to 2× threshold so its zones stay readable at a 16 % threshold.

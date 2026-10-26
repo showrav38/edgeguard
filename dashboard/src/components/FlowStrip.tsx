@@ -4,6 +4,7 @@
 import { int, ms } from "../format";
 import type { Connection } from "../useEdgeGuard";
 import type { Status } from "../types";
+import { GLOSSARY, Help } from "./Help";
 import { ToneLabel, type Tone } from "./Tone";
 
 const DRAINING_MIN = 10;
@@ -87,10 +88,10 @@ export function FlowStrip({ status, heartbeatFresh, connection, liveAgeMs, recei
       {hops.map((h, i) => (
         <div className="flow-item" key={h.name}>
           <div className={`flow-box flow-${h.tone}`}>
-            <div className="flow-name">{h.name}</div>
+            <div className="flow-name">{h.name}{h.name === "MQTT uplink" && <Help term="Buffer">{GLOSSARY.buffer}</Help>}</div>
             <ToneLabel tone={h.tone}>{h.state}</ToneLabel>
             <div className="flow-latency">{h.latency}</div>
-            <div className="muted small">{h.latencyLabel}</div>
+            <div className="muted small">{h.latencyLabel}{i === 0 && <Help term="Latency">{GLOSSARY.latency}</Help>}</div>
             <div className="muted small">{h.detail}</div>
           </div>
           {i < hops.length - 1 && <div className="flow-arrow" aria-hidden="true">→</div>}
