@@ -3,7 +3,7 @@
 
 PY := .venv/bin/python
 
-.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 check-m5 plc edge broker dashboard
+.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 plc edge broker dashboard
 
 help:            ## Show this list
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/ —/'
@@ -32,8 +32,10 @@ dashboard:       ## Run the dashboard dev server on :5173 (needs nvm Node, see R
 broker:          ## Start only the MQTT broker (Docker)
 	docker compose up -d mosquitto
 
-up:              ## Start all services with Docker compose (M6)
-	docker compose up -d --build
+up:              ## Build and start all services with Docker compose, wait until healthy (M6)
+	docker compose up -d --build --wait
+	@echo "Dashboard: http://localhost:8080"
+
 
 down:            ## Stop all services
 	docker compose down
@@ -41,7 +43,7 @@ down:            ## Stop all services
 test:            ## Run unit tests
 	$(PY) -m pytest -q tests
 
-demo:            ## Run the 2-minute scripted demo (M6)
+demo: up         ## Start the stack and run the 2-minute scripted demo (M6)
 	$(PY) scripts/demo.py
 
 check-m0:        ## Milestone 0 check: skeleton is complete
@@ -64,3 +66,6 @@ check-m4: broker
 check-m5:        ## Milestone 5 check: dashboard tests/build + demo commands, heartbeat, simulated outage
 check-m5: broker
 	$(PY) tests/check_m5.py
+
+check-m6:        ## Milestone 6 check: docker compose up, all healthy, telemetry on MQTT, compose down
+	$(PY) tests/check_m6.py

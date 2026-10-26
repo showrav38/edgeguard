@@ -1,0 +1,12 @@
+# Keep the build context small and never copy data or local environments into an image.
+data/
+models/
+.venv/
+.git/
+**/__pycache__/
+.pytest_cache/
+dashboard/node_modules/
+dashboard/dist/
+docs/
+training/
+tests/

@@ -234,3 +234,22 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Why:** the technician needs the action in 5 seconds, the engineer needs latency/buffer/drift numbers. Same data,
   same alarm latch. Limits: the reason sentence uses only the top explanation factor; "usual range" = training
   10th–90th percentile; the gauge spans 0 to 2× threshold so its zones stay readable at a 16 % threshold.
+
+### D-25 — One compose stack, one Python image, models and replay data mounted read-only (M6)
+- **Decision:** `docker-compose.yml` runs mosquitto, plc_sim, edge_app and the dashboard (multi-stage Node build,
+  served by nginx on :8080). plc_sim and edge_app share one slim image (`requirements-edge.txt`: no pandas/sklearn).
+  `./models` and `./data/test.csv` are mounted read-only; the outbox lives on a named volume. Start order by
+  `depends_on: service_healthy`: broker (answers a subscribe) -> PLC (OPC UA port open) -> edge (fresh "running"
+  heartbeat with the PLC connected) -> dashboard (nginx answers).
+- **Alternatives:** copy the models into the image (a new model = a rebuild); start order without healthchecks
+  (the edge app retries, but "up" would not mean "working"); a separate image per service.
+- **Why:** mounting keeps data out of images and git and makes M7's hot-swap possible without a rebuild. The edge
+  healthcheck tests what matters (data flowing), not only "process alive". `make check-m6` verifies it end to end.
+
+### D-26 — `make demo` drives the existing MQTT demo commands from a script (M6)
+- **Decision:** `scripts/demo.py` sends the same `speed` / `drift` / `outage` commands as the dashboard's guided
+  tour, waits for the real event in the telemetry (tool-wear ALARM, drift warning, backlog drained) and prints a
+  caption and live lines per step (~2 min). Step 4 counts buffered, lost (gaps in seq) and order.
+- **Alternatives:** fixed sleeps only (breaks when the alarm comes later); clicking through the guided tour by hand.
+- **Why:** repeatable for a screen recording, and every claim on screen is checked live, not scripted text. The
+  outage is simulated in the edge app (D-18); the real broker stop stays in the M4 check.

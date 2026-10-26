@@ -1,15 +1,83 @@
-# EdgeGuard services. M3: broker only; M6 adds plc_sim, edge_app and dashboard.
+# EdgeGuard: the full edge stack. `docker compose up -d --build --wait` (or `make up`).
+# Start order via healthchecks: mosquitto -> plc_sim -> edge_app -> dashboard.
+# Dashboard: http://localhost:8080 (the browser talks MQTT to ws://localhost:9001 itself).
 services:
   mosquitto:
     image: eclipse-mosquitto:2
-    container_name: edgeguard-mosquitto
+    container_name: edgeguard-mosquitto   # the M4 check stops/starts the broker by this name
     ports:
       - "1883:1883"   # MQTT
       - "9001:9001"   # MQTT over websockets (dashboard)
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data   # broker persistence (M4)
+    healthcheck:
+      # Healthy = the broker answers a subscribe ($SYS topics are published by mosquitto itself).
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/broker/uptime", "-C", "1", "-W", "3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  plc_sim:
+    build: { context: ., dockerfile: docker/python.Dockerfile }
+    image: edgeguard-python
+    command: ["python", "-m", "plc_sim.server"]
+    environment:
+      PLC_CYCLE_MS: ${PLC_CYCLE_MS:-1000}
+      PLC_DATA: /app/data/test.csv
+    volumes:
+      - ./data/test.csv:/app/data/test.csv:ro   # created by `make train`; data/ is not in git
+    ports:
+      - "4840:4840"   # OPC UA (for an OPC UA browser such as UaExpert)
+    depends_on:
+      mosquitto: { condition: service_healthy }
+    healthcheck:
+      # Healthy = the OPC UA port accepts TCP connections.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 4840), 2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  edge_app:
+    build: { context: ., dockerfile: docker/python.Dockerfile }
+    image: edgeguard-python   # same image as plc_sim (the second build is a cache hit)
+    command: ["python", "-m", "edge_app.main"]
+    environment:
+      OPCUA_URL: opc.tcp://plc_sim:4840/edgeguard/
+      MQTT_HOST: mosquitto
+      MODELS_DIR: /app/models
+      BUFFER_PATH: /app/buffer/outbox.db
+      DEMO_COMMANDS: ${DEMO_COMMANDS:-1}
+    volumes:
+      - ./models:/app/models:ro          # ONNX models + model_info.json, from `make train`
+      - edge-buffer:/app/buffer          # store-and-forward outbox survives a container restart
+    depends_on:
+      plc_sim: { condition: service_healthy }
+    healthcheck:
+      # Healthy = a fresh "running" status heartbeat with the PLC connected (edge_app/healthcheck.py).
+      test: ["CMD", "python", "-m", "edge_app.healthcheck"]
+      interval: 5s
+      timeout: 8s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  dashboard:
+    build: { context: ., dockerfile: docker/dashboard.Dockerfile }
+    image: edgeguard-dashboard
+    ports:
+      - "8080:80"
+    depends_on:
+      edge_app: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
 volumes:
   mosquitto-data:
+  edge-buffer:

@@ -1,0 +1,5 @@
+# Runtime only (Docker images for plc_sim and edge_app): no pandas / scikit-learn / matplotlib.
+numpy>=1.26
+onnxruntime>=1.18
+asyncua>=1.1
+paho-mqtt>=2.1,<3
