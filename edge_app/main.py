@@ -4,8 +4,9 @@ One loop iteration per PLC cycle:
   1. wait for a new Seq, read the full row
   2. risk + failure type (ONNX), top-2 factors (occlusion), state + action text
   3. write results back to the PLC (one write request, LastSeqProcessed last)
-  4. publish telemetry over MQTT
-Write-back comes before MQTT: the PLC is the time-critical consumer.
+  4. publish telemetry over MQTT, through the store-and-forward buffer (M4)
+Write-back comes before MQTT: the PLC is the time-critical consumer, and it keeps getting
+results while the MQTT/IT side is down. A drift monitor (M4) flags readings unlike the training data.
 
 Run: python -m edge_app.main      Config via environment variables.
 """
@@ -20,6 +21,8 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 from edge_app import actions, explain
+from edge_app.buffer import Outbox, StoreAndForward
+from edge_app.drift import DriftMonitor
 from edge_app.inference import Models
 from edge_app.opcua_client import PlcClient
 
@@ -44,12 +47,14 @@ def make_mqtt(models: Models) -> mqtt.Client:
         c.publish(TOPIC_STATUS, json.dumps({"state": "running", **status}), qos=1, retain=True)
 
     client.on_connect = on_connect
+    # Retry every 1-5 s while the broker is down (paho's default backs off up to 2 minutes).
+    client.reconnect_delay_set(min_delay=1, max_delay=5)
     client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=10)
     client.loop_start()  # reconnects automatically
     return client
 
 
-def telemetry(seq, signals, pred, decision, factors, inference_ms, ground_truth, missed) -> dict:
+def telemetry(seq, signals, pred, decision, factors, drift, inference_ms, ground_truth, missed) -> dict:
     return {
         "seq": seq,
         "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
@@ -60,10 +65,11 @@ def telemetry(seq, signals, pred, decision, factors, inference_ms, ground_truth,
         "failure_type": decision["failure_type"],
         "action": {"code": decision["code"], "text": decision["text"]},
         "top_factors": factors,
-        "drift_score": None,      # M4
-        "drift_warning": False,   # M4
+        "drift_score": drift["score"],       # None until the drift window is full
+        "drift_warning": drift["warning"],
+        "drift_signals": drift["signals"],   # signals that moved away from training
         "inference_ms": round(inference_ms, 3),
-        "buffered": False,        # M4: True when re-sent from the store-and-forward buffer
+        # "buffered" (stored while MQTT was down) and "buffer_backlog" are set by StoreAndForward
         "ground_truth": ground_truth,
         "missed_cycles": missed,
     }
@@ -73,6 +79,8 @@ async def run():
     models = Models()
     log.info("models loaded: version %s, threshold %.2f", models.version, models.threshold)
     mqttc = make_mqtt(models)
+    sender = StoreAndForward(mqttc, Outbox())
+    drift_monitor = DriftMonitor(models.info["training_stats"])
     plc = PlcClient()
     await plc.connect()
     queue = await plc.subscribe_seq()
@@ -91,6 +99,7 @@ async def run():
         pred = models.predict(signals)
         factors = explain.top_factors(models, pred["x"], pred["risk"])
         decision = actions.decide(pred, signals, models.threshold)
+        drift = drift_monitor.update(signals)
         inference_ms = (time.perf_counter() - t0) * 1000
 
         await plc.write_outputs({
@@ -98,19 +107,20 @@ async def run():
             "Alarm": pred["alarm"],
             "FailureType": decision["failure_type"],
             "ActionCode": decision["code"],
-            "DriftWarning": False,  # M4
+            "DriftWarning": drift["warning"],
             "InferenceMs": inference_ms,
             "ModelVersion": models.version,
             "LastSeqProcessed": seq,
         })
-        msg = telemetry(seq, signals, pred, decision, factors, inference_ms, ground_truth, missed)
-        mqttc.publish(TOPIC_TELEMETRY, json.dumps(msg), qos=1)
+        msg = telemetry(seq, signals, pred, decision, factors, drift, inference_ms, ground_truth, missed)
+        sender.send(TOPIC_TELEMETRY, msg)  # stored in SQLite first, sent in order by a thread
 
         last_seq, n = seq, n + 1
         inf_ms.append(inference_ms)
         if n % 100 == 0:
-            log.info("seq=%d processed=%d missed=%d inference mean %.2f ms (last 100)",
-                     seq, n, missed, statistics.mean(inf_ms))
+            log.info("seq=%d processed=%d missed=%d inference mean %.2f ms (last 100) "
+                     "drift=%s backlog=%d", seq, n, missed, statistics.mean(inf_ms),
+                     drift["score"], msg["buffer_backlog"])
             inf_ms.clear()
 
 

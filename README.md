@@ -32,6 +32,11 @@ _TODO (M6)._
 | `MQTT_HOST` / `MQTT_PORT` | `localhost` / `1883` | edge_app | MQTT broker |
 | `WARNING_FRACTION` | `0.5` | edge_app | WARNING when risk >= 0.5 x alarm threshold |
 | `MODELS_DIR` | `./models` | edge_app | ONNX models + model_info.json |
+| `DRIFT_WINDOW` | `50` | edge_app | readings in the rolling drift window |
+| `DRIFT_ON` / `DRIFT_OFF` | `1.0` / `0.75` | edge_app | drift warning on / off (shift of the window mean, in training std) |
+| `DRIFT_SIGNALS` | `AirTempK,ProcessTempK,SpeedRpm,TorqueNm` | edge_app | signals watched for drift |
+| `BUFFER_PATH` | `./data/outbox.db` | edge_app | SQLite store-and-forward buffer |
+| `BUFFER_MAX_ROWS` | `100000` | edge_app | buffer limit (~5.5 h at 5 Hz); oldest dropped when full |
 
 ## Honest limits
 _TODO (M6): simulated PLC, public semi-synthetic dataset (AI4I 2020), not a real industrial

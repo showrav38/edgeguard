@@ -109,3 +109,29 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Alternatives:** only alarm/no alarm; free text only.
 - **Why:** a "watch" band gives early notice without raising the false-alarm count. A PLC/HMI can react
   to an integer code without parsing text; the technician reads the sentence.
+
+### D-13 — Drift = rolling-window mean shift in training standard deviations, with hysteresis (M4)
+- **Decision:** for AirTempK, ProcessTempK, SpeedRpm, TorqueNm: |mean of last 50 readings − training
+  mean| / training std; score = max. Warning on at >= 1.0, off below 0.75. ToolWearMin not monitored.
+- **Alternatives:** PSI on the training deciles; per-reading out-of-range check; multivariate distance
+  (Mahalanobis, isolation forest).
+- **Why:** one line to explain, uses the stats saved in M1. Calibrated on the unseen test replay (max 0.55,
+  so ~2x margin); drift mode is caught after ~11 readings (1.1 s at 100 ms). Tool wear rises naturally and
+  worn tools are what the model should alarm on, not drift. Limits: one signal at a time, mean only.
+
+### D-14 — Store-and-forward with a SQLite outbox, one message in flight (M4)
+- **Decision:** every telemetry message goes into a SQLite table first; a thread sends the oldest row
+  (QoS 1), waits for its PUBACK, then deletes it. Messages stored while offline get `buffered: true`.
+- **Alternatives:** paho's own in-memory queue; publish directly and buffer only when offline (two paths,
+  ordering races at reconnect); a file per message; a local broker bridge (mosquitto bridge).
+- **Why:** survives an edge app restart (paho's queue does not), and one path + one message in flight
+  makes the order guaranteed by construction. At-least-once: consumers drop duplicates by `seq`. Size
+  limit drops the oldest rows. Result: 20 s outage, 220 buffered, 0 lost, in order, drained in ~1.6 s.
+
+### D-15 — Broker persistence on; the check uses a persistent MQTT session (M4)
+- **Decision:** mosquitto `persistence true` on a named volume; the M4 check subscribes with
+  `clean_session=False`.
+- **Alternatives:** keep persistence off and hope the check reconnects before the edge app drains its buffer.
+- **Why:** after a broker restart the edge app and the test subscriber race to reconnect. Without a
+  persistent session the check could report "lost" messages the edge app did deliver. It also mirrors a
+  real consumer (historian) that must not miss data while it reconnects itself.

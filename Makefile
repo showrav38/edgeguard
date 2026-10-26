@@ -3,7 +3,7 @@
 
 PY := .venv/bin/python
 
-.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 plc edge broker
+.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 plc edge broker
 
 help:            ## Show this list
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/ —/'
@@ -52,3 +52,7 @@ check-m2:        ## Milestone 2 check: PLC simulator OPC UA interface
 check-m3:        ## Milestone 3 check: PLC -> edge app -> write-back + MQTT, 500 readings
 check-m3: broker
 	$(PY) tests/check_m3.py
+
+check-m4:        ## Milestone 4 check: drift warning + store-and-forward through a 20 s broker outage
+check-m4: broker
+	$(PY) tests/check_m4.py
