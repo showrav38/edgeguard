@@ -3,6 +3,7 @@ data/
 *.csv
 
 # --- Python ---
+*.joblib
 .venv/
 __pycache__/
 *.pyc

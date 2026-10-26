@@ -1,0 +1,346 @@
+{
+  "features": [
+    "AirTempK",
+    "ProcessTempK",
+    "SpeedRpm",
+    "TorqueNm",
+    "ToolWearMin",
+    "ProductType"
+  ],
+  "product_type_code": {
+    "L": 0,
+    "M": 1,
+    "H": 2
+  },
+  "failure_types": [
+    "TWF",
+    "HDF",
+    "PWF",
+    "OSF"
+  ],
+  "failure_type_names": {
+    "TWF": "tool_wear",
+    "HDF": "heat_dissipation",
+    "PWF": "power",
+    "OSF": "overstrain"
+  },
+  "training_stats": {
+    "AirTempK": {
+      "mean": 300.01978333333335,
+      "std": 2.0041624068561794,
+      "min": 295.3,
+      "max": 304.5,
+      "median": 300.1,
+      "deciles": [
+        297.4,
+        298.1,
+        298.7,
+        299.2,
+        300.1,
+        300.6,
+        301.1,
+        302.0,
+        302.7
+      ]
+    },
+    "ProcessTempK": {
+      "mean": 310.01238333333333,
+      "std": 1.4794126040613398,
+      "min": 305.7,
+      "max": 313.8,
+      "median": 310.1,
+      "deciles": [
+        308.1,
+        308.6,
+        309.1,
+        309.6,
+        310.1,
+        310.5,
+        310.9,
+        311.3,
+        311.9
+      ]
+    },
+    "SpeedRpm": {
+      "mean": 1538.8695,
+      "std": 180.51504130242628,
+      "min": 1168.0,
+      "max": 2886.0,
+      "median": 1503.0,
+      "deciles": [
+        1364.0,
+        1404.0,
+        1438.0,
+        1469.0,
+        1503.0,
+        1541.0,
+        1586.0,
+        1646.0,
+        1742.1000000000004
+      ]
+    },
+    "TorqueNm": {
+      "mean": 40.03406666666667,
+      "std": 10.03493245927556,
+      "min": 3.8,
+      "max": 76.6,
+      "median": 40.1,
+      "deciles": [
+        27.3,
+        31.4,
+        34.7,
+        37.4,
+        40.1,
+        42.64000000000001,
+        45.4,
+        48.5,
+        52.7
+      ]
+    },
+    "ToolWearMin": {
+      "mean": 107.49283333333334,
+      "std": 63.566329782143484,
+      "min": 0.0,
+      "max": 253.0,
+      "median": 107.0,
+      "deciles": [
+        20.0,
+        41.0,
+        63.0,
+        85.0,
+        107.0,
+        129.0,
+        151.0,
+        173.0,
+        195.0
+      ]
+    },
+    "ProductType": {
+      "mean": 0.49416666666666664,
+      "std": 0.671043445356227,
+      "min": 0.0,
+      "max": 2.0,
+      "median": 0.0,
+      "deciles": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        2.0
+      ]
+    }
+  },
+  "split": {
+    "seed": 42,
+    "train": 6000,
+    "val": 2000,
+    "test": 2000
+  },
+  "risk_feature_importance": {
+    "AirTempK": 0.06301833648590192,
+    "ProcessTempK": 0.022212432285036634,
+    "SpeedRpm": 0.30859600934822495,
+    "TorqueNm": 0.3971501485685356,
+    "ToolWearMin": 0.20374260104646763,
+    "ProductType": 0.00528047226583331
+  },
+  "threshold": 0.22,
+  "cost_false_alarm": 1.0,
+  "cost_missed_failure": 20.0,
+  "cost_ratio": 20.0,
+  "threshold_validation": {
+    "chosen": {
+      "threshold": 0.22,
+      "cost": 247.0,
+      "missed": 6,
+      "false_alarms": 127
+    },
+    "default": {
+      "threshold": 0.5,
+      "cost": 322.0,
+      "missed": 13,
+      "false_alarms": 62
+    }
+  },
+  "test_metrics": {
+    "risk": {
+      "roc_auc": 0.9755282547801729,
+      "cost_based": {
+        "threshold": 0.22,
+        "precision": 0.3076923076923077,
+        "recall": 0.8823529411764706,
+        "f1": 0.45627376425855515,
+        "confusion": {
+          "tn": 1797,
+          "fp": 135,
+          "fn": 8,
+          "tp": 60
+        }
+      },
+      "default_0_5": {
+        "threshold": 0.5,
+        "precision": 0.46153846153846156,
+        "recall": 0.7941176470588235,
+        "f1": 0.5837837837837838,
+        "confusion": {
+          "tn": 1869,
+          "fp": 63,
+          "fn": 14,
+          "tp": 54
+        }
+      },
+      "recall_by_failure_kind": {
+        "TWF": {
+          "n": 7,
+          "recall": 0.7142857142857143
+        },
+        "HDF": {
+          "n": 26,
+          "recall": 1.0
+        },
+        "PWF": {
+          "n": 15,
+          "recall": 0.8
+        },
+        "OSF": {
+          "n": 20,
+          "recall": 0.9
+        },
+        "RNF": {
+          "n": 5,
+          "recall": 0.0
+        }
+      }
+    },
+    "failure_type": {
+      "n": 67,
+      "accuracy": 0.9104477611940298,
+      "per_type": {
+        "TWF": {
+          "n": 7,
+          "precision": 0.875,
+          "recall": 1.0,
+          "f1": 0.9333333333333333
+        },
+        "HDF": {
+          "n": 26,
+          "precision": 0.9230769230769231,
+          "recall": 0.9230769230769231,
+          "f1": 0.9230769230769231
+        },
+        "PWF": {
+          "n": 15,
+          "precision": 0.9285714285714286,
+          "recall": 0.8666666666666667,
+          "f1": 0.896551724137931
+        },
+        "OSF": {
+          "n": 19,
+          "precision": 0.8947368421052632,
+          "recall": 0.8947368421052632,
+          "f1": 0.8947368421052632
+        }
+      },
+      "confusion": [
+        [
+          7,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          24,
+          1,
+          1
+        ],
+        [
+          0,
+          1,
+          13,
+          1
+        ],
+        [
+          1,
+          1,
+          0,
+          17
+        ]
+      ]
+    }
+  },
+  "model_version": "1.0.0",
+  "onnx_check": {
+    "max_allowed_diff": 1e-05,
+    "risk": {
+      "max_abs_diff": 1.8135107726635624e-07,
+      "same_decision": 2000,
+      "rows": 2000
+    },
+    "failure_type": {
+      "max_abs_diff": 3.008319659492109e-07,
+      "same_decision": 2000,
+      "rows": 2000
+    }
+  },
+  "latency_ms": {
+    "n": 1000,
+    "mean": 0.09920262300101967,
+    "p95": 0.13700999982120263
+  },
+  "versions": {
+    "python": "3.11.17",
+    "scikit-learn": "1.9.1",
+    "skl2onnx": "1.20.0",
+    "onnxruntime": "1.31.0"
+  },
+  "rules_check": {
+    "per_rule": {
+      "TWF": {
+        "fires": 179,
+        "labelled_in_region": 7,
+        "labels_inside_region": 1.0,
+        "model_alarm_rate": 0.5754189944134078,
+        "type_match_when_alarm": 0.6699029126213593
+      },
+      "HDF": {
+        "fires": 26,
+        "labelled_in_region": 26,
+        "labels_inside_region": 1.0,
+        "model_alarm_rate": 1.0,
+        "type_match_when_alarm": 0.9230769230769231
+      },
+      "PWF": {
+        "fires": 15,
+        "labelled_in_region": 15,
+        "labels_inside_region": 1.0,
+        "model_alarm_rate": 0.8,
+        "type_match_when_alarm": 0.9166666666666666
+      },
+      "OSF": {
+        "fires": 20,
+        "labelled_in_region": 20,
+        "labels_inside_region": 1.0,
+        "model_alarm_rate": 0.9,
+        "type_match_when_alarm": 0.8888888888888888
+      }
+    },
+    "no_rule_alarm_rate": 0.028700056274620148,
+    "false_alarms": 135,
+    "false_alarms_in_twf_window": 84,
+    "baseline": {
+      "rules_HDF_PWF_OSF": {
+        "precision": 1.0,
+        "recall": 0.8823529411764706
+      },
+      "model": {
+        "precision": 0.3076923076923077,
+        "recall": 0.8823529411764706
+      }
+    }
+  }
+}
