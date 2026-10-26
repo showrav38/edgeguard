@@ -65,3 +65,20 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
   physics. Result: HDF 100% caught, OSF 90%, PWF 80% (misses sit just above 9000 W: trees on raw
   torque and speed approximate a product badly), 84 of 135 false alarms are in the TWF window, where
   failure is random. A rules baseline beats the model on precision. This is an honest limit of the dataset.
+
+### D-08 — OPC UA interface: one consistent row per cycle, "Seq written last" (M2)
+- **Decision:** the PLC writes all signals, then `Seq`. The client subscribes only to `Seq`, then
+  reads the whole row in ONE read request and checks that `Seq` did not change meanwhile. A gap in
+  `Seq` = a missed cycle. String node ids (`ns=2;s=Machine1.AirTempK`) for readability.
+- **Alternatives:** subscribe to every signal (values arrive separately, rows can mix two cycles);
+  one structured variable (custom DataType, more complex); polling on a timer (misses or doubles rows).
+- **Why:** simple and checkable: the M2 check saw 50/50 consistent rows and 0 gaps at 100 ms.
+  A real PLC would offer a consistent data block or a structure. No security (NoSecurity) for the
+  demo only; a plant would use certificates.
+
+### D-09 — Drift mode = +8 K on both temperatures and +300 rpm (M2)
+- **Decision:** `DriftMode` (writable bool) shifts the replayed signals; labels are not changed.
+- **Alternatives:** random noise; replay a different product mix; scale torque.
+- **Why:** mimics a real change (hot summer shop floor, new speed recipe) and moves air temperature
+  far outside the training range (~295–304 K), so M4 has a clear case to detect. The temperature
+  difference stays the same, so this is a "the input looks different" test, not a new failure mode.
