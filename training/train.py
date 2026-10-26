@@ -71,7 +71,10 @@ def main():
         "failure_types": c.FAILURE_TYPES,
         "failure_type_names": c.FAILURE_TYPE_NAMES,
         "training_stats": training_stats(train),
-        "split": {"seed": c.SEED, "train": len(train), "val": len(val), "test": len(test)},
+        "split": {"method": "time (UDI order)", "train_udi": [int(train.UDI.min()), int(train.UDI.max())],
+                  "val_udi": [int(val.UDI.min()), int(val.UDI.max())],
+                  "test_udi": [int(test.UDI.min()), int(test.UDI.max())],
+                  "train": len(train), "val": len(val), "test": len(test)},
         # Mean decrease in impurity: a rough global ranking, reported for interest only.
         "risk_feature_importance": dict(zip(c.FEATURES, map(float, risk.feature_importances_))),
     })

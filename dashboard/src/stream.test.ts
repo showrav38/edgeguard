@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addTelemetry, emptyView, HISTORY_POINTS, SeqDeduper } from "./stream";
+import { acknowledge, addTelemetry, emptyView, formatDuration, HISTORY_POINTS, SeqDeduper, type View } from "./stream";
 import type { Telemetry } from "./types";
 
 function msg(seq: number, state: Telemetry["state"] = "OK", ts = `2026-10-26T10:00:00.${seq}Z`): Telemetry {
@@ -53,6 +53,8 @@ describe("addTelemetry", () => {
       v = addTelemetry(v, msg(seq, st), 0);
     }
     expect(v.alarms.map((a) => a.seq)).toEqual([5, 2]);
+    expect(v.alarms[1].endTs).toBe(msg(4).ts); // the first alarm ended at seq 4
+    expect(v.alarms[0].endTs).toBeNull(); // the second is still active
   });
 
   it("measures live latency only on non-buffered messages", () => {
@@ -61,5 +63,45 @@ describe("addTelemetry", () => {
     expect(v.liveAgeMs).toBe(30);
     v = addTelemetry(v, { ...msg(2, "OK", ts), buffered: true }, Date.parse(ts) + 20000);
     expect(v.liveAgeMs).toBe(30);
+  });
+});
+
+describe("alarm latch", () => {
+  const feed = (v: View, states: Telemetry["state"][], start: number) =>
+    states.reduce((acc, st, i) => addTelemetry(acc, msg(start + i, st), 0), v);
+
+  it("stays latched after the readings go back to OK, until acknowledged", () => {
+    let v = feed(emptyView, ["OK", "ALARM", "ALARM", "OK", "OK"], 1);
+    expect(v.latched).toMatchObject({ startSeq: 2, active: false, endTs: msg(4).ts, acknowledged: false });
+    v = acknowledge(v);
+    expect(v.latched).toBeNull();
+  });
+
+  it("acknowledged while active: stays until the readings leave ALARM", () => {
+    let v = feed(emptyView, ["ALARM", "ALARM"], 1);
+    v = acknowledge(v);
+    expect(v.latched).toMatchObject({ active: true, acknowledged: true });
+    v = feed(v, ["ALARM"], 3);
+    expect(v.latched?.acknowledged).toBe(true);
+    v = feed(v, ["OK"], 4);
+    expect(v.latched).toBeNull();
+  });
+
+  it("an alarm that returns before acknowledgement is the same latched alarm", () => {
+    let v = feed(emptyView, ["ALARM", "OK", "ALARM"], 1);
+    expect(v.latched).toMatchObject({ startSeq: 1, active: true, endTs: null });
+  });
+
+  it("keeps the highest-risk reading for the action", () => {
+    let v = addTelemetry(emptyView, { ...msg(1, "ALARM"), risk: 0.5 }, 0);
+    v = addTelemetry(v, { ...msg(2, "ALARM"), risk: 0.9 }, 0);
+    v = addTelemetry(v, { ...msg(3, "ALARM"), risk: 0.6 }, 0);
+    expect(v.latched?.peak.seq).toBe(2);
+  });
+
+  it("formats durations", () => {
+    expect(formatDuration(45_000)).toBe("45 s");
+    expect(formatDuration(192_000)).toBe("3 min 12 s");
+    expect(formatDuration(3_900_000)).toBe("1 h 05 min");
   });
 });

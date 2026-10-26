@@ -30,7 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 ENDPOINT = os.getenv("OPCUA_ENDPOINT", "opc.tcp://0.0.0.0:4840/edgeguard/")
 NAMESPACE = "urn:edgeguard:plc"
-CYCLE_MS = int(os.getenv("PLC_CYCLE_MS", "200"))
+CYCLE_MS = int(os.getenv("PLC_CYCLE_MS", "1000"))  # one reading per second, like a slow machine log
 DATA_CSV = os.getenv("PLC_DATA", os.path.join(ROOT, "data", "test.csv"))
 # Optional CSV file "seq,latency_ms": time from the PLC writing Seq to the edge app writing
 # LastSeqProcessed for that Seq. Both timestamps are taken here, in one process, on one clock.
@@ -69,8 +69,9 @@ log = logging.getLogger("plc_sim")
 
 
 def load_rows(path: str) -> list[dict]:
+    """Test rows in time (UDI) order: tool wear rises and resets like on a real machine."""
     with open(path, newline="") as fh:
-        return list(csv.DictReader(fh))
+        return sorted(csv.DictReader(fh), key=lambda r: int(r["UDI"]))
 
 
 def ground_truth_type(row: dict) -> str:

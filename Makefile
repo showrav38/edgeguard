@@ -15,6 +15,7 @@ venv:            ## Create .venv with Python 3.11 and install requirements (need
 train:           ## Train models, choose threshold, evaluate, export ONNX (M1)
 	$(PY) training/train.py
 	$(PY) training/choose_threshold.py
+	$(PY) training/calibrate_drift.py
 	$(PY) training/evaluate.py
 	$(PY) training/rules_check.py
 	$(PY) training/export_onnx.py

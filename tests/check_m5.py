@@ -32,8 +32,12 @@ PORT = 4843
 CYCLE_MS = 100
 OUTAGE_S = 10
 BUFFER_MAX_ROWS = 50
-TOPIC_T, TOPIC_S, TOPIC_C = ("edgeguard/machine1/telemetry", "edgeguard/machine1/status",
-                             "edgeguard/machine1/cmd")
+# Own topics and MQTT client id: a dev stack running on the same broker cannot mix in.
+PREFIX = "edgeguard-check-m5/machine1"
+ISOLATION_ENV = {"MQTT_CLIENT_ID": "edgeguard-edge-check-m5", "MQTT_TOPIC_TELEMETRY": f"{PREFIX}/telemetry",
+                 "MQTT_TOPIC_STATUS": f"{PREFIX}/status", "MQTT_TOPIC_CMD": f"{PREFIX}/cmd"}
+TOPIC_T, TOPIC_S, TOPIC_C = (ISOLATION_ENV["MQTT_TOPIC_TELEMETRY"], ISOLATION_ENV["MQTT_TOPIC_STATUS"],
+                             ISOLATION_ENV["MQTT_TOPIC_CMD"])
 NODE_IMAGE = "node:22.11.0-bookworm-slim"
 
 errors = []
@@ -112,7 +116,7 @@ def check_live():
     tmp = tempfile.mkdtemp(prefix="edgeguard-m5-")
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     plc_env = {**env, "OPCUA_ENDPOINT": f"opc.tcp://0.0.0.0:{PORT}/edgeguard/", "PLC_CYCLE_MS": str(CYCLE_MS)}
-    edge_env = {**env, "OPCUA_URL": f"opc.tcp://127.0.0.1:{PORT}/edgeguard/",
+    edge_env = {**env, **ISOLATION_ENV, "OPCUA_URL": f"opc.tcp://127.0.0.1:{PORT}/edgeguard/",
                 "BUFFER_PATH": os.path.join(tmp, "outbox.db"), "BUFFER_MAX_ROWS": str(BUFFER_MAX_ROWS)}
     logs = {n: open(os.path.join(tmp, f"{n}.log"), "w") for n in ("plc", "edge")}
 

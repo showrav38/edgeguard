@@ -35,7 +35,11 @@ PORT = 4841
 CYCLE_MS = 100
 MAX_E2E_P95_MS = CYCLE_MS / 2        # must finish well within one PLC cycle
 MAX_INFERENCE_P95_MS = 10.0
-TOPIC_T, TOPIC_S = "edgeguard/machine1/telemetry", "edgeguard/machine1/status"
+# Own topics and MQTT client id: a dev stack running on the same broker cannot mix in.
+PREFIX = "edgeguard-check-m3/machine1"
+ISOLATION_ENV = {"MQTT_CLIENT_ID": "edgeguard-edge-check-m3", "MQTT_TOPIC_TELEMETRY": f"{PREFIX}/telemetry",
+                 "MQTT_TOPIC_STATUS": f"{PREFIX}/status", "MQTT_TOPIC_CMD": f"{PREFIX}/cmd"}
+TOPIC_T, TOPIC_S = ISOLATION_ENV["MQTT_TOPIC_TELEMETRY"], ISOLATION_ENV["MQTT_TOPIC_STATUS"]
 FIELDS = ["seq", "ts", "signals", "risk", "alarm", "failure_type", "action", "top_factors",
           "drift_score", "drift_warning", "inference_ms", "buffered", "ground_truth"]
 STATE_CODES = {"OK": {0}, "WARNING": {5}, "ALARM": {1, 2, 3, 4}}
@@ -77,7 +81,9 @@ def main() -> int:
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     plc_env = {**env, "OPCUA_ENDPOINT": f"opc.tcp://0.0.0.0:{PORT}/edgeguard/", "PLC_CYCLE_MS": str(CYCLE_MS),
                "PLC_LATENCY_LOG": latency_log}
-    edge_env = {**env, "OPCUA_URL": f"opc.tcp://127.0.0.1:{PORT}/edgeguard/"}
+    # Own SQLite outbox too: two edge apps sharing one outbox file would send each other's rows.
+    edge_env = {**env, **ISOLATION_ENV, "OPCUA_URL": f"opc.tcp://127.0.0.1:{PORT}/edgeguard/",
+                "BUFFER_PATH": os.path.join(tmp, "outbox.db")}
     plc_log, edge_log = open(os.path.join(tmp, "plc.log"), "w"), open(os.path.join(tmp, "edge.log"), "w")
 
     inbox: queue.Queue = queue.Queue()

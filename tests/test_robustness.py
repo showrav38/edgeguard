@@ -9,11 +9,12 @@ import pytest
 
 from edge_app import commands
 from edge_app.buffer import Outbox, StoreAndForward
-from edge_app.drift import DriftMonitor
+from edge_app.drift import DRIFT_WINDOW, DriftMonitor, thresholds
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INFO = json.load(open(os.path.join(ROOT, "models", "model_info.json")))
 TEST = pd.read_csv(os.path.join(ROOT, "data", "test.csv"))
+DRIFT_ON, DRIFT_OFF = thresholds(INFO)
 
 
 def rows(n, temp_shift=0.0, speed_shift=0.0, start=0):
@@ -22,29 +23,38 @@ def rows(n, temp_shift=0.0, speed_shift=0.0, start=0):
                "SpeedRpm": r.SpeedRpm + speed_shift, "TorqueNm": r.TorqueNm, "ToolWearMin": r.ToolWearMin}
 
 
-def test_no_drift_warning_on_unseen_test_rows():
-    mon = DriftMonitor(INFO["training_stats"])
-    results = [mon.update(s) for s in rows(len(TEST))]
+def test_thresholds_were_chosen_without_test_data():
+    d = INFO["drift"]
+    assert d["chosen_on"].startswith("train + validation")
+    assert d["calibration"]["false_warning_rate"] <= d["target_false_rate"]
+
+
+def test_few_false_warnings_on_train_and_validation_rows_in_time_order():
+    # Same measurement as training/calibrate_drift.py, done here independently (UDI 1-8000).
+    past = pd.concat([pd.read_csv(os.path.join(ROOT, "data", f"{n}.csv")) for n in ("train", "val")])
+    mon = DriftMonitor(INFO["training_stats"], DRIFT_ON, DRIFT_OFF)
+    results = [mon.update(r) for r in past.sort_values("UDI").to_dict("records")]
     assert results[0]["score"] is None                  # window not full yet
-    assert not any(r["warning"] for r in results)
-    assert max(r["score"] for r in results if r["score"] is not None) < 0.75
+    scored = [r["warning"] for r in results if r["score"] is not None]
+    assert sum(scored) / len(scored) <= INFO["drift"]["target_false_rate"]
 
 
 def test_drift_mode_shift_is_detected_quickly_and_clears():
-    mon = DriftMonitor(INFO["training_stats"])
+    mon = DriftMonitor(INFO["training_stats"], DRIFT_ON, DRIFT_OFF)
     for s in rows(100):
         mon.update(s)
     # Same shift as the PLC drift mode: +8 K on both temperatures, +300 rpm.
     delay = next(i for i, s in enumerate(rows(100, 8, 300, start=100), 1) if mon.update(s)["warning"])
-    assert delay <= 25
-    assert "AirTempK" in mon.update(next(rows(1, 8, 300, start=300)))["signals"]
+    assert delay <= DRIFT_WINDOW
+    # Process temperature has the smallest training std, so the same +8 K stands out most there.
+    assert "ProcessTempK" in mon.update(next(rows(1, 8, 300, start=300)))["signals"]
     # Back to normal: the warning clears once the window is mostly normal again.
     cleared = [mon.update(s)["warning"] for s in rows(100, start=400)]
     assert cleared[-1] is False
 
 
 def test_tool_wear_is_not_drift():
-    mon = DriftMonitor(INFO["training_stats"])
+    mon = DriftMonitor(INFO["training_stats"], DRIFT_ON, DRIFT_OFF)
     results = [mon.update({**s, "ToolWearMin": 230.0}) for s in rows(200)]
     assert not any(r["warning"] for r in results)
 

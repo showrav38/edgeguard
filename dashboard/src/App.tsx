@@ -12,7 +12,7 @@ import { useEdgeGuard, useNow } from "./useEdgeGuard";
 const HEARTBEAT_TIMEOUT_MS = 3000; // the edge app sends a status every second
 
 export default function App() {
-  const { view, status, statusAt, connection, duplicates, received, send, url } = useEdgeGuard();
+  const { view, status, statusAt, connection, duplicates, received, send, ack, url } = useEdgeGuard();
   const now = useNow(1000);
   const heartbeatFresh = statusAt != null && now - statusAt < HEARTBEAT_TIMEOUT_MS;
   const edgeRunning = connection === "connected" && heartbeatFresh && status?.state === "running";
@@ -22,9 +22,15 @@ export default function App() {
       <header className="header">
         <div>
           <h1>EdgeGuard <span className="muted">· Machine 1</span></h1>
-          <p className="muted small">Predictive maintenance at the edge · broker {url}</p>
+          <p className="how-to">
+            How to read this dashboard: the top strip shows whether data gets through; the left card is the
+            machine state (alarms stay until you acknowledge them); the right card says what to do and why;
+            the charts show the last 100 readings.
+          </p>
+          <p className="muted small">
+            Predictive maintenance at the edge · broker {url}{status && ` · model ${status.model_version}`}
+          </p>
         </div>
-        {status && <p className="muted small">model {status.model_version}</p>}
       </header>
 
       <FlowStrip status={status} heartbeatFresh={heartbeatFresh} connection={connection}
@@ -32,8 +38,9 @@ export default function App() {
       <DriftBanner m={view.latest} />
 
       <div className="grid-2">
-        <StatusCard m={view.latest} threshold={status?.threshold} costRatio={status?.cost_ratio} />
-        <ActionCard m={view.latest} />
+        <StatusCard m={view.latest} latched={view.latched} now={now} onAck={ack}
+                    threshold={status?.threshold} costRatio={status?.cost_ratio} />
+        <ActionCard latest={view.latest} latched={view.latched} />
       </div>
 
       <Charts points={view.points} threshold={status?.threshold} />

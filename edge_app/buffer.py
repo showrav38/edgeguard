@@ -32,7 +32,7 @@ import time
 import paho.mqtt.client as mqtt
 
 BUFFER_PATH = os.getenv("BUFFER_PATH", "./data/outbox.db")
-BUFFER_MAX_ROWS = int(os.getenv("BUFFER_MAX_ROWS", "100000"))  # ~5.5 h at 5 Hz
+BUFFER_MAX_ROWS = int(os.getenv("BUFFER_MAX_ROWS", "100000"))  # ~28 h at 1 reading/s
 
 log = logging.getLogger("buffer")
 

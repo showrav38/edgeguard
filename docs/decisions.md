@@ -51,7 +51,7 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
   set, so the test numbers are not optimistic. The cost curve is flat near the minimum, so the
   exact value is not fragile; with only 68 validation failures it is still noisy.
 
-### D-06 — Stratified 60/20/20 split; PLC simulator replays the test rows (M1)
+### D-06 — Stratified 60/20/20 split; PLC simulator replays the test rows (M1) — superseded by D-20
 - **Decision:** split once with a fixed seed, save data/{train,val,test}.csv.
 - **Alternatives:** cross-validation; time-based split.
 - **Why:** the dataset has no real time order, so a stratified random split is fair. Replaying
@@ -102,6 +102,11 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Finding:** for a real power failure (9.03 kW, seq 70) the top factor was ProcessTempK: the model
   only alarms there if process temp < ~309.7 K. The explanation is faithful to the MODEL, and it exposed a
   spurious split learned from few high-power failures. Same root cause as D-07 (no power feature).
+- **Update (time split, D-20):** seq numbers now refer to the time-ordered replay, and seq 70 is a different row.
+  The reference example is now **seq 1614** (UDI 9614, a real power failure at 9.01 kW, just above the 9 kW limit):
+  risk 0.91, top factors TorqueNm, then ProcessTempK. Torque is half of power, but the temperature as the 2nd factor
+  is the same spurious pattern: the model has no power feature. M7 (model v2 with engineered features) should move
+  the explanation to power.
 
 ### D-12 — Three machine states and numeric action codes (M3)
 - **Decision:** ALARM (risk >= threshold), WARNING (risk >= 0.5 x threshold), OK. ActionCode 0 none,
@@ -110,7 +115,7 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Why:** a "watch" band gives early notice without raising the false-alarm count. A PLC/HMI can react
   to an integer code without parsing text; the technician reads the sentence.
 
-### D-13 — Drift = rolling-window mean shift in training standard deviations, with hysteresis (M4)
+### D-13 — Drift = rolling-window mean shift in training standard deviations, with hysteresis (M4) — thresholds recalibrated in D-21
 - **Decision:** for AirTempK, ProcessTempK, SpeedRpm, TorqueNm: |mean of last 50 readings − training
   mean| / training std; score = max. Warning on at >= 1.0, off below 0.75. ToolWearMin not monitored.
 - **Alternatives:** PSI on the training deciles; per-reading out-of-range check; multivariate distance
@@ -171,3 +176,51 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Alternatives:** keep only "seq > last seq" (freezes after a PLC restart); re-render per message.
 - **Why:** at-least-once delivery needs an idempotent consumer. After an outage the buffer drains at ~150 msg/s;
   batching keeps the page smooth. Pure logic lives in `stream.ts` with vitest tests.
+
+### D-20 — Time-based split by UDI; the PLC replays the test rows in time order, 1 reading/s (review after M5)
+- **Decision:** UDI 1–6000 fit the models, 6001–8000 choose the threshold, 8001–10000 = test (and the PLC replay,
+  in UDI order, default cycle 1000 ms). Replaces the stratified random split of D-06.
+- **Alternatives:** keep the random split (the replay jumps tool wear 0 -> 220 -> 10, nothing looks like a machine);
+  train on all of the first 80 % and tune the threshold on it (optimistic threshold); time-series cross-validation.
+- **Why:** UDI is time order (tool wear rises ~2 min per row, resets 119 times). Training only on the past and testing
+  on the future is the honest setup, and the replay now looks like a machine over time.
+- **Result (test, old random -> new time split):** threshold 0.22 -> 0.16, ROC-AUC 0.976 -> 0.955, recall 0.88 -> 0.85,
+  precision 0.31 -> 0.21, F1 0.46 -> 0.33. Not the same test rows: all 115 HDF failures happen in UDI 2001–8000
+  (a hot period), so the new test set has 0 HDF (the easiest type, 100 % recall before) and 0 RNF. The rules-only
+  baseline (HDF/PWF/OSF) now has recall 0.72 vs the model's 0.85 (D-07 said "same recall"). Power failures: 10/10
+  alarmed, top factor TorqueNm every time; the D-11 seq 70 example no longer exists (closest now: seq 1614,
+  9.01 kW, ProcessTempK as the 2nd factor).
+- **Finding:** even in time order, alarms are short (104 episodes in 2000 readings, mean 1.6 readings): most AI4I
+  failures are single-reading rule triggers, only tool wear builds up. This is why the dashboard latches alarms (D-22).
+
+### D-21 — Drift thresholds chosen on training + validation windows: on 2.35, off 1.88 std (review after M5)
+- **Decision:** `training/calibrate_drift.py` replays UDI 1–8000 (train + validation, one continuous stretch in time
+  order) through the edge app's own `DriftMonitor` and picks the smallest DRIFT_ON with <= 1 % false warnings
+  (OFF = 0.8 x ON). Test data (UDI 8001–10000) is never used for the choice. Stored in model_info.json -> "drift";
+  env vars override. Runs in `make train`.
+- **Alternatives:** validation only; the max training-window score plus a margin; a season-aware detector.
+- **Why:** air temperature moves with the seasons, so normal 50-reading windows can be far from the training mean.
+  The calibration data must contain that normal variation. History: 1.0/0.75 (D-13, shuffled rows) fired on 44 % of
+  normal test windows. 3.0/2.5 came from the max training score plus margin, and I had looked at test scores while
+  choosing: not a clean choice. 1.45/1.16 (validation only) met 1 % there, but validation is one calm season; the same
+  thresholds would warn 23 % of the time in the hot season of the training period. Too thin a margin.
+- **Result:** UDI 1–8000: 0 % false warnings. Test (reported only): 0 % false warnings on normal windows; drift mode
+  caught after median 30 / p95 36 readings, 100 % detected.
+- **Limit:** a real shift smaller than ~2.35 std is not flagged, and a hotter season than any in the data would still
+  look like drift.
+
+### D-22 — Dashboard alarms latch until acknowledged; acknowledgement is per browser (review after M5)
+- **Decision:** the first ALARM reading latches the alarm with its start time, duration and the action of its
+  highest-risk reading; it stays after the readings clear ("cleared, not acknowledged"). Acknowledge while active ->
+  "acknowledged", removed when the readings leave ALARM. Logic in `stream.ts`, unit-tested.
+- **Alternatives:** show only the current reading (flickers, a 1-reading alarm is easy to miss); hold the alarm state
+  in the edge app / PLC (shared across screens, the industrial way, more work).
+- **Why:** mirrors the usual HMI alarm practice (an alarm must be seen and acknowledged). Limit: the acknowledgement
+  lives in one browser tab; a second screen or a page reload does not know about it.
+
+### D-23 — Check scripts isolated from a running dev stack (review after M5)
+- **Decision:** M3–M5 checks run their edge app with their own MQTT topics (`edgeguard-check-mN/...`), own client id
+  (new env var `MQTT_CLIENT_ID`) and own SQLite outbox.
+- **Why:** with a dev stack running, the checks read the other edge app's messages, sent it demo commands, two clients
+  with the same id kicked each other off the broker, and two edge apps sharing one outbox file sent each other's rows
+  (duplicates). Each was seen as a check failure. A real site would also need unique client ids per edge device.

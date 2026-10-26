@@ -28,13 +28,19 @@ from asyncua import Client, ua
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from edge_app.drift import DRIFT_ON, DRIFT_WINDOW  # noqa: E402
+from edge_app.drift import DRIFT_WINDOW, thresholds  # noqa: E402
+
+DRIFT_ON, _ = thresholds(json.load(open(os.path.join(ROOT, "models", "model_info.json"))))
 
 PORT = 4842
 CYCLE_MS = 100
 OUTAGE_S = 20
 BROKER = "edgeguard-mosquitto"
-TOPIC_T = "edgeguard/machine1/telemetry"
+# Own topics and MQTT client id: a dev stack running on the same broker cannot mix in.
+PREFIX = "edgeguard-check-m4/machine1"
+ISOLATION_ENV = {"MQTT_CLIENT_ID": "edgeguard-edge-check-m4", "MQTT_TOPIC_TELEMETRY": f"{PREFIX}/telemetry",
+                 "MQTT_TOPIC_STATUS": f"{PREFIX}/status", "MQTT_TOPIC_CMD": f"{PREFIX}/cmd"}
+TOPIC_T = ISOLATION_ENV["MQTT_TOPIC_TELEMETRY"]
 PLC_URL = f"opc.tcp://127.0.0.1:{PORT}/edgeguard/"
 
 errors = []
@@ -99,7 +105,7 @@ def main() -> int:
     tmp = tempfile.mkdtemp(prefix="edgeguard-m4-")
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     plc_env = {**env, "OPCUA_ENDPOINT": f"opc.tcp://0.0.0.0:{PORT}/edgeguard/", "PLC_CYCLE_MS": str(CYCLE_MS)}
-    edge_env = {**env, "OPCUA_URL": PLC_URL, "BUFFER_PATH": os.path.join(tmp, "outbox.db")}
+    edge_env = {**env, **ISOLATION_ENV, "OPCUA_URL": PLC_URL, "BUFFER_PATH": os.path.join(tmp, "outbox.db")}
     plc_log, edge_log = open(os.path.join(tmp, "plc.log"), "w"), open(os.path.join(tmp, "edge.log"), "w")
 
     inbox: queue.Queue = queue.Queue()

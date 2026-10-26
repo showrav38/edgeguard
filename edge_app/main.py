@@ -28,12 +28,14 @@ import paho.mqtt.client as mqtt
 
 from edge_app import actions, commands, explain
 from edge_app.buffer import Outbox, StoreAndForward
-from edge_app.drift import DriftMonitor
+from edge_app.drift import DriftMonitor, thresholds
 from edge_app.inference import Models
 from edge_app.opcua_client import PlcClient
 
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+# Must be unique per broker: a second client with the same id makes the broker drop the first.
+MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "edgeguard-edge")
 TOPIC_TELEMETRY = os.getenv("MQTT_TOPIC_TELEMETRY", "edgeguard/machine1/telemetry")
 TOPIC_STATUS = os.getenv("MQTT_TOPIC_STATUS", "edgeguard/machine1/status")
 TOPIC_CMD = os.getenv("MQTT_TOPIC_CMD", "edgeguard/machine1/cmd")
@@ -46,7 +48,7 @@ log = logging.getLogger("edge")
 def make_mqtt(models: Models, on_command) -> mqtt.Client:
     """paho-mqtt client running its network loop in a background thread.
     on_command(payload: bytes) is called (in paho's thread) for every message on the command topic."""
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="edgeguard-edge")
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
     status = {"model_version": models.version, "threshold": models.threshold,
               "cost_ratio": models.info["cost_ratio"]}
     # If we die without saying goodbye, the broker publishes this retained "offline" status.
@@ -103,7 +105,7 @@ class Edge:
         self.mqtt = make_mqtt(self.models, lambda p: loop.call_soon_threadsafe(self.commands.put_nowait, p))
         self.outbox = Outbox()
         self.sender = StoreAndForward(self.mqtt, self.outbox)
-        self.drift_monitor = DriftMonitor(self.models.info["training_stats"])
+        self.drift_monitor = DriftMonitor(self.models.info["training_stats"], *thresholds(self.models.info))
         self.plc = PlcClient()
         # Live numbers for the status heartbeat (updated by the loop)
         self.last_seq, self.missed, self.last_row_at = None, 0, 0.0

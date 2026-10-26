@@ -8,7 +8,6 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
@@ -17,7 +16,7 @@ DOCS_DIR = os.path.join(ROOT, "docs")
 RAW_CSV = os.path.join(DATA_DIR, "ai4i2020.csv")
 MODEL_INFO = os.path.join(MODELS_DIR, "model_info.json")
 
-SEED = 42
+SEED = 42  # model random state (the split itself is deterministic, by time)
 
 # Dataset column -> our feature name (= OPC UA variable name). Order = model input order.
 COLUMN_MAP = {
@@ -65,9 +64,15 @@ def single_failure_type(row) -> str:
 
 
 def split(df: pd.DataFrame):
-    """Stratified 60 / 20 / 20 split on 'Machine failure' (same seed every time)."""
-    train, rest = train_test_split(df, test_size=0.4, stratify=df["Machine failure"], random_state=SEED)
-    val, test = train_test_split(rest, test_size=0.5, stratify=rest["Machine failure"], random_state=SEED)
+    """Time-based split by UDI (the dataset is in time order: tool wear rises and resets).
+
+    First 80 % = the past, used for development: UDI 1-6000 fit the models, UDI 6001-8000 choose
+    the alarm threshold. Last 20 % (UDI 8001-10000) = the "future", used only for the test and
+    replayed by the PLC simulator. No row from the future is used for training.
+    """
+    df = df.sort_values("UDI")
+    n = len(df)
+    train, val, test = df.iloc[: int(n * 0.6)], df.iloc[int(n * 0.6): int(n * 0.8)], df.iloc[int(n * 0.8):]
     return train, val, test
 
 

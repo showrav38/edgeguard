@@ -4,11 +4,12 @@
 import type { Command, Status } from "../types";
 
 const OUTAGE_S = 20;
+// 1× = one reading per second (the PLC simulator default); one tool life is ~84 readings.
 const SPEEDS = [
-  { label: "0.5×", cycleMs: 400 },
-  { label: "1×", cycleMs: 200 },
-  { label: "2×", cycleMs: 100 },
-  { label: "4×", cycleMs: 50 },
+  { label: "1×", cycleMs: 1000 },
+  { label: "2×", cycleMs: 500 },
+  { label: "5×", cycleMs: 200 },
+  { label: "10×", cycleMs: 100 },
 ];
 
 export function DemoControls({ status, enabled, send }: {

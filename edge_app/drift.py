@@ -4,12 +4,12 @@ Method (rolling-window mean shift, a z-score):
   for each monitored signal, over the last DRIFT_WINDOW readings:
       score = |mean(window) - training mean| / training std
   drift_score = the largest score over the signals.
-  Warning ON when drift_score >= DRIFT_ON (default 1.0 std), OFF again only when it falls below
-  DRIFT_OFF (default 0.75). The gap (hysteresis) stops the warning from flickering at the border.
+  Warning ON when drift_score >= DRIFT_ON, OFF again only when it falls below DRIFT_OFF. The gap
+  (hysteresis) stops the warning from flickering at the border.
 
-Calibration: replaying the 2,000 unseen test rows, the score never exceeds 0.55 with a
-50-reading window, so 1.0 leaves about a 2x margin. Drift mode (+8 K, +300 rpm) moves the
-air temperature mean by 4 std, so the warning comes after about 10-15 readings.
+Thresholds are chosen on training + validation (UDI 1-8000, both seasons) by
+training/calibrate_drift.py (target: at most 1 % false warnings on normal data) and stored in models/model_info.json -> "drift". The env vars
+DRIFT_ON / DRIFT_OFF override them. See docs/decisions.md D-21.
 
 ToolWearMin is NOT monitored by default: it rises naturally until the tool is changed, and a
 batch of worn tools is exactly what the model should alarm on, not a reason to distrust it.
@@ -23,14 +23,18 @@ import os
 from collections import deque
 
 DRIFT_WINDOW = int(os.getenv("DRIFT_WINDOW", "50"))
-DRIFT_ON = float(os.getenv("DRIFT_ON", "1.0"))
-DRIFT_OFF = float(os.getenv("DRIFT_OFF", "0.75"))
 DRIFT_SIGNALS = os.getenv("DRIFT_SIGNALS", "AirTempK,ProcessTempK,SpeedRpm,TorqueNm").split(",")
 
 
+def thresholds(info: dict) -> tuple[float, float]:
+    """(on, off): env vars if set, else the values calibrated on validation (model_info.json)."""
+    return (float(os.getenv("DRIFT_ON") or info["drift"]["on"]),
+            float(os.getenv("DRIFT_OFF") or info["drift"]["off"]))
+
+
 class DriftMonitor:
-    def __init__(self, training_stats: dict, signals: list[str] = DRIFT_SIGNALS,
-                 window: int = DRIFT_WINDOW, on: float = DRIFT_ON, off: float = DRIFT_OFF):
+    def __init__(self, training_stats: dict, on: float, off: float,
+                 signals: list[str] = DRIFT_SIGNALS, window: int = DRIFT_WINDOW):
         self.stats = {s: training_stats[s] for s in signals}
         self.window = window
         self.on, self.off = on, off
@@ -38,7 +42,7 @@ class DriftMonitor:
         self.warning = False
 
     def update(self, signals: dict) -> dict:
-        """Add one reading. Returns {score, warning, signals: the signals above DRIFT_ON}."""
+        """Add one reading. Returns {score, warning, signals: the signals above the on threshold}."""
         for s, buf in self.values.items():
             buf.append(float(signals[s]))
 

@@ -1,21 +1,55 @@
 // The two cards a technician reads first: machine state, and what to do now (with the reasons).
 import { FAILURE_TYPES, pct, SIGNALS, signalValue } from "../format";
+import { formatDuration, type LatchedAlarm } from "../stream";
 import type { Telemetry } from "../types";
 import { ToneLabel, type Tone } from "./Tone";
 
 const STATE_TONE: Record<string, Tone> = { OK: "ok", WARNING: "warn", ALARM: "bad" };
 
-export function StatusCard({ m, threshold, costRatio }: { m: Telemetry | null; threshold?: number; costRatio?: number }) {
+const clock = (ts: string) => new Date(ts).toLocaleTimeString([], { hour12: false });
+
+/** Latched alarm: when it started, how long it has been (or was) active, and the Acknowledge button. */
+function AlarmLatch({ latched, now, onAck }: { latched: LatchedAlarm; now: number; onAck: () => void }) {
+  const start = Date.parse(latched.startTs);
+  return (
+    <div className="latch">
+      <p className="latch-time num">
+        {latched.active
+          ? <>Active since {clock(latched.startTs)} · <strong>{formatDuration(now - start)}</strong></>
+          : <>Was active {clock(latched.startTs)}–{clock(latched.endTs!)} ({formatDuration(Date.parse(latched.endTs!) - start)}).
+              Readings are back to normal.</>}
+      </p>
+      {latched.acknowledged
+        ? <p className="muted small">Acknowledged. Clears when the readings leave ALARM.</p>
+        : <button className="ack" onClick={onAck}>Acknowledge</button>}
+    </div>
+  );
+}
+
+export function StatusCard({ m, latched, now, onAck, threshold, costRatio }: {
+  m: Telemetry | null;
+  latched: LatchedAlarm | null;
+  now: number;
+  onAck: () => void;
+  threshold?: number;
+  costRatio?: number;
+}) {
   if (!m) return <section className="card status-card"><h2>Machine 1</h2><p className="muted">Waiting for data…</p></section>;
-  const tone = STATE_TONE[m.state] ?? "idle";
+  // A latched alarm wins over the current reading: ALARM stays until it is acknowledged.
+  const state = latched ? "ALARM" : m.state;
+  const tone = STATE_TONE[state] ?? "idle";
+  const label = latched && !latched.active ? "ALARM (cleared, not acknowledged)"
+    : latched?.acknowledged ? "ALARM · acknowledged" : state;
   return (
     <section className={`card status-card status-${tone}`}>
       <h2>Machine 1</h2>
-      <div className="big-state"><ToneLabel tone={tone}>{m.state}</ToneLabel></div>
+      <div className="big-state"><ToneLabel tone={tone}>{label}</ToneLabel></div>
+      {latched && <AlarmLatch latched={latched} now={now} onAck={onAck} />}
       <dl className="facts">
-        <div><dt>Failure risk</dt><dd className="num">{pct(m.risk)}</dd></div>
+        <div><dt>Current failure risk</dt><dd className="num">{pct(m.risk)}</dd></div>
         <div><dt>Alarm threshold</dt><dd className="num">{threshold != null ? pct(threshold) : "–"}</dd></div>
-        <div><dt>Most likely failure</dt><dd>{FAILURE_TYPES[m.failure_type] ?? m.failure_type}</dd></div>
+        <div><dt>Most likely failure</dt>
+          <dd>{FAILURE_TYPES[latched?.peak.failure_type ?? m.failure_type] ?? m.failure_type}</dd></div>
         <div><dt>Reading</dt><dd className="num">seq {m.seq}{m.buffered ? " (buffered)" : ""}</dd></div>
       </dl>
       {costRatio != null && (
@@ -27,9 +61,11 @@ export function StatusCard({ m, threshold, costRatio }: { m: Telemetry | null; t
   );
 }
 
-export function ActionCard({ m }: { m: Telemetry | null }) {
-  if (!m) return <section className="card action-card"><h2>What to do now</h2><p className="muted">–</p></section>;
-  const tone = STATE_TONE[m.state] ?? "idle";
+export function ActionCard({ latest, latched }: { latest: Telemetry | null; latched: LatchedAlarm | null }) {
+  if (!latest) return <section className="card action-card"><h2>What to do now</h2><p className="muted">–</p></section>;
+  // While an alarm is latched, show ITS action (from its highest-risk reading), not the latest reading's.
+  const m = latched ? latched.peak : latest;
+  const tone = latched ? "bad" : STATE_TONE[m.state] ?? "idle";
   const maxEffect = Math.max(0.01, ...m.top_factors.map((f) => Math.abs(f.effect)));
   const pushing = m.top_factors.some((f) => f.effect >= 0.005); // at least 0.5 risk points
   return (
@@ -57,6 +93,7 @@ export function ActionCard({ m }: { m: Telemetry | null }) {
           );
         })}
       </ul>}
+      {latched && <p className="muted small">From the alarm's highest-risk reading (seq {m.seq}, risk {pct(m.risk)}).</p>}
       <p className="muted small">
         Method: each signal is set to its training median; the drop in risk is its effect (one signal at a time).
       </p>

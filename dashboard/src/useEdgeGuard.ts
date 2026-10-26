@@ -1,7 +1,7 @@
 // MQTT connection to the broker (websockets) and the dashboard state built from the messages.
 import mqtt, { type MqttClient } from "mqtt";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { addTelemetry, emptyView, SeqDeduper, type View } from "./stream";
+import { acknowledge, addTelemetry, emptyView, SeqDeduper, type View } from "./stream";
 import type { Command, Status, Telemetry } from "./types";
 
 // Default: the broker runs on the same host that serves the dashboard.
@@ -80,7 +80,10 @@ export function useEdgeGuard() {
     clientRef.current?.publish(TOPIC_CMD, JSON.stringify(cmd), { qos: 1 });
   }, []);
 
-  return { view, status, statusAt, connection, duplicates, received, send, url: MQTT_URL };
+  // Acknowledge is local to this browser (see docs/decisions.md D-22).
+  const ack = useCallback(() => setView((v) => acknowledge(v)), []);
+
+  return { view, status, statusAt, connection, duplicates, received, send, ack, url: MQTT_URL };
 }
 
 /** Re-render every `ms` so "seconds ago" and heartbeat timeouts stay current. */
