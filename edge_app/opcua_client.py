@@ -58,6 +58,7 @@ class PlcClient:
         self.seq_node = node("Seq")
         self.read_nodes = [self.seq_node] + [node(n) for n in SIGNALS + EXTRA]
         self.out_nodes = [node(n) for n in OUTPUT_TYPES]
+        self.drift_node, self.cycle_node = node("DriftMode"), node("CycleMs")
         log.info("connected to PLC %s (namespace index %d)", self.url, ns)
 
     async def subscribe_seq(self) -> asyncio.Queue:
@@ -78,6 +79,18 @@ class PlcClient:
         """Write all edge outputs in ONE write request (order: LastSeqProcessed last)."""
         variants = [ua.Variant(outputs[n], vt) for n, vt in OUTPUT_TYPES.items()]
         await self.client.write_values(self.out_nodes, variants)
+
+    async def read_demo(self) -> dict:
+        """Demo settings of the simulated PLC: drift mode and replay cycle time."""
+        drift, cycle_ms = await self.client.read_values([self.drift_node, self.cycle_node])
+        return {"drift_mode": drift, "cycle_ms": cycle_ms}
+
+    async def write_demo(self, drift: bool | None = None, cycle_ms: int | None = None):
+        """Demo commands from the dashboard (see commands.py)."""
+        if drift is not None:
+            await self.drift_node.write_value(ua.Variant(drift, ua.VariantType.Boolean))
+        if cycle_ms is not None:
+            await self.cycle_node.write_value(ua.Variant(cycle_ms, ua.VariantType.Int32))
 
     async def disconnect(self):
         await self.client.disconnect()

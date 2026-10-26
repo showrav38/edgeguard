@@ -9,6 +9,8 @@ Namespace "urn:edgeguard:plc", object "Machine1".
 One row per cycle. All signals are written first and Seq LAST, so a client that sees a new Seq
 can read one consistent row. Seq keeps counting when the replay wraps around.
 
+CycleMs (writable, demo) changes the replay speed while running (clamped to 20..2000 ms).
+
 DriftMode = True shifts the signals outside the training range (hotter shop floor, faster speed)
 to test drift detection (M4). Ground truth is left unchanged: we do not know the real outcome.
 
@@ -132,6 +134,10 @@ async def main():
         ua.NodeId("Machine1.DriftMode", ns), ua.QualifiedName("DriftMode", ns),
         ua.Variant(False, ua.VariantType.Boolean))
     await drift_node.set_writable()
+    cycle_node = await machine.add_variable(
+        ua.NodeId("Machine1.CycleMs", ns), ua.QualifiedName("CycleMs", ns),
+        ua.Variant(CYCLE_MS, ua.VariantType.Int32))
+    await cycle_node.set_writable()
 
     # --- End-to-end latency: Seq written (here) -> LastSeqProcessed written (by the edge app) ---
     last_seq_id = ua.NodeId("Machine1.LastSeqProcessed", ns)
@@ -180,7 +186,8 @@ async def main():
                 recent_ms.clear()
 
             # Fixed-rate schedule (no slow drift of the cycle time over hours).
-            next_tick += CYCLE_MS / 1000
+            cycle_ms = min(2000, max(20, await cycle_node.read_value()))
+            next_tick += cycle_ms / 1000
             await asyncio.sleep(max(0.0, next_tick - loop.time()))
 
 

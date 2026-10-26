@@ -1,10 +1,14 @@
-"""Unit tests for M4: drift monitor and the SQLite outbox (no PLC or broker needed)."""
+"""Unit tests for M4/M5: drift monitor, SQLite outbox, store-and-forward, demo commands
+(no PLC or broker needed)."""
 import json
 import os
+import time
 
 import pandas as pd
+import pytest
 
-from edge_app.buffer import Outbox
+from edge_app import commands
+from edge_app.buffer import Outbox, StoreAndForward
 from edge_app.drift import DriftMonitor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -68,3 +72,82 @@ def test_outbox_drops_oldest_when_full(tmp_path):
         box.put("t", json.dumps({"seq": i}))
     assert len(box) == 3 and box.dropped == 2
     assert json.loads(box.oldest()[2])["seq"] == 2
+
+
+def test_outbox_dropped_count_survives_restart(tmp_path):
+    path = str(tmp_path / "outbox.db")
+    box = Outbox(path, max_rows=2)
+    for i in range(5):
+        box.put("t", json.dumps({"seq": i}))
+    box.db.close()
+    box = Outbox(path, max_rows=2)  # "restart": the count is read back from SQLite
+    assert box.dropped == 3
+    box.put("t", json.dumps({"seq": 5}))
+    assert box.dropped == 4 and len(box) == 2
+
+
+class FakeMqtt:
+    """Stands in for paho: always connected, acknowledges every publish at once."""
+
+    def __init__(self):
+        self.sent, self.mid, self.on_publish = [], 0, None
+
+    def is_connected(self):
+        return True
+
+    def publish(self, topic, payload, qos=0):
+        self.mid += 1
+        self.sent.append(json.loads(payload))
+        info = type("Info", (), {"mid": self.mid})()
+        self.on_publish(self, None, self.mid, None, None)  # PUBACK
+        return info
+
+
+def wait_for(cond, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline and not cond():
+        time.sleep(0.02)
+    return cond()
+
+
+def test_simulated_outage_buffers_and_reports_dropped(tmp_path):
+    client = FakeMqtt()
+    sender = StoreAndForward(client, Outbox(str(tmp_path / "outbox.db"), max_rows=3))
+    try:
+        sender.send("t", {"seq": 1})
+        assert wait_for(lambda: len(client.sent) == 1)
+        assert client.sent[0]["buffered"] is False and sender.uplink_state() == "up"
+
+        sender.simulate_outage(0.5)  # broker reachable, but the uplink is treated as down
+        assert sender.uplink_state() == "simulated_down"
+        for seq in range(2, 7):      # 5 messages into a buffer of 3: the 2 oldest are dropped
+            sender.send("t", {"seq": seq})
+        assert len(client.sent) == 1  # nothing sent during the outage
+
+        assert wait_for(lambda: len(client.sent) == 4)  # drained after the outage, in order
+        assert [m["seq"] for m in client.sent] == [1, 4, 5, 6]
+        assert all(m["buffered"] for m in client.sent[1:])
+        # A message carries the count from BEFORE it was stored: seq 6 pushed out the 2nd drop.
+        assert client.sent[-1]["buffer_dropped"] == 1 and sender.outbox.dropped == 2
+        assert sender.uplink_state() == "up" and sender.last_ack_ms is not None
+    finally:
+        sender.stop()
+
+
+@pytest.mark.parametrize("payload, expected", [
+    (b'{"cmd": "drift", "on": true}', {"cmd": "drift", "on": True}),
+    (b'{"cmd": "outage", "seconds": 20}', {"cmd": "outage", "seconds": 20.0}),
+    (b'{"cmd": "speed", "cycle_ms": 100}', {"cmd": "speed", "cycle_ms": 100}),
+])
+def test_commands_valid(payload, expected):
+    assert commands.parse(payload) == expected
+
+
+@pytest.mark.parametrize("payload", [
+    b"not json", b"[1, 2]", b'{"cmd": "reboot"}', b'{"cmd": "drift", "on": 1}',
+    b'{"cmd": "outage", "seconds": 9999}', b'{"cmd": "speed", "cycle_ms": 5}',
+    b'{"cmd": "speed", "cycle_ms": true}',
+])
+def test_commands_rejected(payload):
+    with pytest.raises(ValueError):
+        commands.parse(payload)

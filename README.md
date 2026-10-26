@@ -4,7 +4,7 @@ Predictive maintenance at the edge: live PLC signals over OPC UA → ONNX failur
 failure-type models → an action the technician can act on, with explanation, cost-based alarm
 threshold, drift warning and store-and-forward MQTT.
 
-> Status: work in progress (milestone M0 — skeleton).
+> Status: work in progress (milestones M0–M5 done: models, PLC simulator, edge app, robustness, dashboard).
 
 ## Why this project (ME)
 _TODO (ME): write in my own words._
@@ -36,7 +36,10 @@ _TODO (M6)._
 | `DRIFT_ON` / `DRIFT_OFF` | `1.0` / `0.75` | edge_app | drift warning on / off (shift of the window mean, in training std) |
 | `DRIFT_SIGNALS` | `AirTempK,ProcessTempK,SpeedRpm,TorqueNm` | edge_app | signals watched for drift |
 | `BUFFER_PATH` | `./data/outbox.db` | edge_app | SQLite store-and-forward buffer |
-| `BUFFER_MAX_ROWS` | `100000` | edge_app | buffer limit (~5.5 h at 5 Hz); oldest dropped when full |
+| `BUFFER_MAX_ROWS` | `100000` | edge_app | buffer limit (~5.5 h at 5 Hz); oldest dropped when full, count reported |
+| `STATUS_INTERVAL_S` | `1.0` | edge_app | status heartbeat interval (PLC / edge / uplink health) |
+| `DEMO_COMMANDS` | `1` | edge_app | `0` = ignore the demo command topic `edgeguard/machine1/cmd` |
+| `VITE_MQTT_URL` | `ws://<page host>:9001` | dashboard | MQTT websocket URL (set at build time) |
 
 ## Honest limits
 _TODO (M6): simulated PLC, public semi-synthetic dataset (AI4I 2020), not a real industrial

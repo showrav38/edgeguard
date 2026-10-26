@@ -3,7 +3,7 @@
 
 PY := .venv/bin/python
 
-.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 plc edge broker
+.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 check-m5 plc edge broker dashboard
 
 help:            ## Show this list
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/ —/'
@@ -24,6 +24,9 @@ plc:             ## Run the simulated PLC (OPC UA server) locally on port 4840
 
 edge:            ## Run the edge app locally (needs a PLC and the broker)
 	$(PY) -m edge_app.main
+
+dashboard:       ## Run the dashboard dev server on :5173 (needs nvm Node, see README)
+	cd dashboard && npm install && npm run dev
 
 broker:          ## Start only the MQTT broker (Docker)
 	docker compose up -d mosquitto
@@ -56,3 +59,7 @@ check-m3: broker
 check-m4:        ## Milestone 4 check: drift warning + store-and-forward through a 20 s broker outage
 check-m4: broker
 	$(PY) tests/check_m4.py
+
+check-m5:        ## Milestone 5 check: dashboard tests/build + demo commands, heartbeat, simulated outage
+check-m5: broker
+	$(PY) tests/check_m5.py

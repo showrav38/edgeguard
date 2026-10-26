@@ -135,3 +135,39 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Why:** after a broker restart the edge app and the test subscriber race to reconnect. Without a
   persistent session the check could report "lost" messages the edge app did deliver. It also mirrors a
   real consumer (historian) that must not miss data while it reconnects itself.
+
+### D-16 — Buffer limit: drop the oldest, count the drops persistently, report them (M5)
+- **Decision:** `BUFFER_MAX_ROWS` (default 100k, ~5.5 h at 5 Hz). When full, the oldest rows are deleted;
+  the dropped count is kept in a SQLite `meta` table and reported in telemetry (`buffer_dropped`), the status
+  heartbeat and the dashboard.
+- **Alternatives:** no limit (disk fills up, the edge device dies); drop the NEWEST (keeps stale data, loses
+  the current state); downsample old rows.
+- **Why:** the newest data matters most to a technician; a bounded disk is a hard edge requirement. Dropping
+  must never be silent: the M5 check shows every missing seq is accounted for by the dropped count.
+
+### D-17 — Status heartbeat every second, sent directly (not through the outbox) (M5)
+- **Decision:** the edge app publishes `edgeguard/machine1/status` (retained, QoS 0) every second with PLC,
+  edge and uplink health: OPC UA read+write time, inference time, PUBACK time, backlog, dropped, drift mode, cycle.
+- **Alternatives:** derive health from telemetry only; buffer the status like telemetry.
+- **Why:** telemetry is history and must not be lost; status is "now" and a stale one is useless, so it skips the
+  buffer (QoS 0: not piled up in paho's memory while the broker is down). That is also why the dashboard can
+  show the backlog growing during a simulated outage. Dashboard: no heartbeat for 3 s = "no heartbeat".
+
+### D-18 — Demo commands over MQTT, validated in the edge app; the outage is simulated in the edge app (M5)
+- **Decision:** `edgeguard/machine1/cmd` with `drift`, `outage`, `speed`; `commands.py` whitelists and range-checks
+  each one, rejections are reported in the status. Drift/speed are written to the simulated PLC (`DriftMode`,
+  new writable `CycleMs`). The outage makes the store-and-forward sender treat the uplink as down.
+- **Alternatives:** stop the broker (the dashboard would lose its connection too); a separate HTTP control API;
+  the dashboard writing OPC UA directly.
+- **Why:** one protocol for the browser, and the dashboard stays connected so the outage is visible. The buffering
+  code path is the same as in a real outage (M4 tests the real one with `docker stop`). The UI labels it
+  "simulated". Risk: the broker has no login, so anyone on the network could send commands; `DEMO_COMMANDS=0`
+  turns them off, a plant would use broker ACLs.
+
+### D-19 — Dashboard: duplicates dropped by (seq, ts), updates batched every 200 ms (M5)
+- **Decision:** a message is a duplicate when its seq was seen with the same `ts` (QoS 1 re-sends are
+  byte-identical); same seq with a new ts = the PLC restarted, accepted. Incoming messages are applied to the view
+  every 200 ms. Charts: last 100 points, one measure per chart.
+- **Alternatives:** keep only "seq > last seq" (freezes after a PLC restart); re-render per message.
+- **Why:** at-least-once delivery needs an idempotent consumer. After an outage the buffer drains at ~150 msg/s;
+  batching keeps the page smooth. Pure logic lives in `stream.ts` with vitest tests.
