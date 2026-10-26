@@ -1,0 +1,28 @@
+# --- Data: public dataset, downloaded locally, never committed ---
+data/
+*.csv
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# --- Runtime files written by the edge app (store-and-forward buffer) ---
+*.sqlite
+*.db
+buffer/
+
+# --- Dashboard (Node) ---
+dashboard/node_modules/
+dashboard/dist/
+
+# --- Local config / editors / OS ---
+.env
+.vscode/
+.idea/
+.DS_Store
+
+# --- Personal instructions for Claude Code (kept out of git) ---
+CLAUDE.md
