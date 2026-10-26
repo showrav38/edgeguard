@@ -19,6 +19,20 @@ latency)._
 ## How to run
 _TODO (M6)._
 
+### Configuration (environment variables, defaults)
+| Variable | Default | Used by | Meaning |
+|---|---|---|---|
+| `PLC_CYCLE_MS` | `200` | plc_sim | one replayed row every 200 ms (5 Hz); the check scripts run faster (100 ms) |
+| `OPCUA_ENDPOINT` | `opc.tcp://0.0.0.0:4840/edgeguard/` | plc_sim | OPC UA server endpoint |
+| `DRIFT_TEMP_K` / `DRIFT_SPEED_RPM` | `8` / `300` | plc_sim | signal shift when `DriftMode` is on |
+| `COST_MISSED_FAILURE` / `COST_FALSE_ALARM` | `20` / `1` | training | costs used to choose the alarm threshold |
+| `PLC_LATENCY_LOG` | (off) | plc_sim | CSV of end-to-end latency per Seq |
+| `OPCUA_URL` | `opc.tcp://localhost:4840/edgeguard/` | edge_app | PLC to connect to |
+| `OPCUA_PUBLISH_MS` | `10` | edge_app | OPC UA subscription publishing interval |
+| `MQTT_HOST` / `MQTT_PORT` | `localhost` / `1883` | edge_app | MQTT broker |
+| `WARNING_FRACTION` | `0.5` | edge_app | WARNING when risk >= 0.5 x alarm threshold |
+| `MODELS_DIR` | `./models` | edge_app | ONNX models + model_info.json |
+
 ## Honest limits
 _TODO (M6): simulated PLC, public semi-synthetic dataset (AI4I 2020), not a real industrial
 edge device; random failures (RNF) are not predictable by definition._

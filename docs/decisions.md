@@ -82,3 +82,30 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Why:** mimics a real change (hot summer shop floor, new speed recipe) and moves air temperature
   far outside the training range (~295–304 K), so M4 has a clear case to detect. The temperature
   difference stays the same, so this is a "the input looks different" test, not a new failure mode.
+
+### D-10 — Edge loop: write back to the PLC first, then MQTT; latency measured inside the PLC (M3)
+- **Decision:** per cycle: read row -> ONNX -> explanation -> action -> ONE OPC UA write (LastSeqProcessed
+  last) -> MQTT publish. End-to-end latency = PLC writes Seq -> server receives LastSeqProcessed,
+  both timestamps taken in the PLC process (asyncua PostWrite callback), logged to a CSV.
+- **Alternatives:** publish MQTT first; measure in a third client or with OPC UA timestamps.
+- **Why:** the PLC is the time-critical consumer; MQTT/IT may be slow or down (M4). One clock in one
+  process gives an exact number with no clock sync. Result: mean 12.1 ms, p95 14.7 ms at a 100 ms cycle
+  (most of it is the 10 ms OPC UA publishing interval; inference + explanation is ~1.1 ms).
+
+### D-11 — Explanation by occlusion with the training median (M3)
+- **Decision:** for each signal, set it to its training median, recompute risk; effect = drop in risk.
+  Report the top 2. One batched ONNX call (6 rows).
+- **Alternatives:** SHAP (more correct, extra dependency, harder to explain); deviation from mean x
+  feature importance (cheap but not specific to this reading); no explanation.
+- **Why:** model-agnostic, easy to explain in one sentence, uses the deployed ONNX model. Limits: one
+  signal at a time (misses interactions), median = "typical" not "healthy", effects do not sum to the risk.
+- **Finding:** for a real power failure (9.03 kW, seq 70) the top factor was ProcessTempK: the model
+  only alarms there if process temp < ~309.7 K. The explanation is faithful to the MODEL, and it exposed a
+  spurious split learned from few high-power failures. Same root cause as D-07 (no power feature).
+
+### D-12 — Three machine states and numeric action codes (M3)
+- **Decision:** ALARM (risk >= threshold), WARNING (risk >= 0.5 x threshold), OK. ActionCode 0 none,
+  1 replace tool, 2 check cooling, 3 check power/drive, 4 reduce load, 5 watch. Text built from live values.
+- **Alternatives:** only alarm/no alarm; free text only.
+- **Why:** a "watch" band gives early notice without raising the false-alarm count. A PLC/HMI can react
+  to an integer code without parsing text; the technician reads the sentence.

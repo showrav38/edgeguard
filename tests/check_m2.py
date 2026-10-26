@@ -99,7 +99,8 @@ async def run_checks():
         check(gaps == 0, f"{N_CYCLES} cycles received, Seq {seqs[0]}..{seqs[-1]}, gaps: {gaps}")
         intervals = [(b - a) * 1000 for a, b in zip(stamps, stamps[1:])]
         mean_ms = sum(intervals) / len(intervals)
-        check(abs(mean_ms - CYCLE_MS) < 0.2 * CYCLE_MS, f"mean cycle {mean_ms:.1f} ms (target {CYCLE_MS} ms)")
+        check(abs(mean_ms - CYCLE_MS) < 0.2 * CYCLE_MS, f"mean cycle {mean_ms:.1f} ms (target {CYCLE_MS} ms: the check runs the PLC "
+                                                              f"faster than the 200 ms default)")
         check(inconsistent == 0, f"rows consistent (Seq unchanged during read): {N_CYCLES - inconsistent}/{N_CYCLES}")
         check(mismatched == 0, f"rows equal data/test.csv: {N_CYCLES - mismatched}/{N_CYCLES}")
 

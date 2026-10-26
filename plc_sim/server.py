@@ -18,8 +18,11 @@ import asyncio
 import csv
 import logging
 import os
+import statistics
+import time
 
 from asyncua import Server, ua
+from asyncua.common.callback import CallbackType
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -27,6 +30,9 @@ ENDPOINT = os.getenv("OPCUA_ENDPOINT", "opc.tcp://0.0.0.0:4840/edgeguard/")
 NAMESPACE = "urn:edgeguard:plc"
 CYCLE_MS = int(os.getenv("PLC_CYCLE_MS", "200"))
 DATA_CSV = os.getenv("PLC_DATA", os.path.join(ROOT, "data", "test.csv"))
+# Optional CSV file "seq,latency_ms": time from the PLC writing Seq to the edge app writing
+# LastSeqProcessed for that Seq. Both timestamps are taken here, in one process, on one clock.
+LATENCY_LOG = os.getenv("PLC_LATENCY_LOG", "")
 
 # Drift: +8 K on both temperatures (training range is ~295-304 K air) and +300 rpm.
 DRIFT_TEMP_K = float(os.getenv("DRIFT_TEMP_K", "8"))
@@ -123,8 +129,33 @@ async def main():
     seq_node = await machine.add_variable(
         ua.NodeId("Machine1.Seq", ns), ua.QualifiedName("Seq", ns), ua.Variant(0, ua.VariantType.Int32))
     drift_node = await machine.add_variable(
-        ua.NodeId("Machine1.DriftMode", ns), ua.QualifiedName("DriftMode", ns), ua.Variant(False, ua.VariantType.Boolean))
+        ua.NodeId("Machine1.DriftMode", ns), ua.QualifiedName("DriftMode", ns),
+        ua.Variant(False, ua.VariantType.Boolean))
     await drift_node.set_writable()
+
+    # --- End-to-end latency: Seq written (here) -> LastSeqProcessed written (by the edge app) ---
+    last_seq_id = ua.NodeId("Machine1.LastSeqProcessed", ns)
+    seq_written_at: dict[int, float] = {}  # seq -> perf_counter() when Seq was written
+    recent_ms: list[float] = []
+    latency_file = open(LATENCY_LOG, "w") if LATENCY_LOG else None
+    if latency_file:
+        latency_file.write("seq,latency_ms\n")
+
+    def on_write(event, _dispatcher):
+        """asyncua calls this after every OPC UA write request (public PostWrite callback)."""
+        for wv in event.request_params.NodesToWrite:
+            if wv.NodeId != last_seq_id:
+                continue
+            t_seq = seq_written_at.pop(wv.Value.Value.Value, None)
+            if t_seq is None:
+                continue
+            ms = (time.perf_counter() - t_seq) * 1000
+            recent_ms.append(ms)
+            if latency_file:
+                latency_file.write(f"{wv.Value.Value.Value},{ms:.3f}\n")
+                latency_file.flush()
+
+    server.subscribe_server_callback(CallbackType.PostWrite, on_write)
 
     log.info("replaying %d rows from %s every %d ms on %s", len(rows), DATA_CSV, CYCLE_MS, ENDPOINT)
     async with server:
@@ -137,9 +168,16 @@ async def main():
             for name, value in row_values(row, drift).items():
                 await plc[name].write_value(ua.Variant(value, PLC_SIGNALS[name][0]))
             seq += 1
+            seq_written_at[seq] = time.perf_counter()
+            seq_written_at.pop(seq - 100, None)  # forget rows the edge app never answered
             await seq_node.write_value(ua.Variant(seq, ua.VariantType.Int32))  # last: row complete
             if seq % 100 == 0:
-                log.info("seq=%d drift=%s", seq, drift)
+                if recent_ms:
+                    log.info("seq=%d drift=%s e2e latency (last %d): mean %.1f ms, max %.1f ms",
+                             seq, drift, len(recent_ms), statistics.mean(recent_ms), max(recent_ms))
+                else:
+                    log.info("seq=%d drift=%s (no edge app answering)", seq, drift)
+                recent_ms.clear()
 
             # Fixed-rate schedule (no slow drift of the cycle time over hours).
             next_tick += CYCLE_MS / 1000

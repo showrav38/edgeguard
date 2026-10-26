@@ -3,7 +3,7 @@
 
 PY := .venv/bin/python
 
-.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 plc
+.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 plc edge broker
 
 help:            ## Show this list
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/ —/'
@@ -21,6 +21,12 @@ train:           ## Train models, choose threshold, evaluate, export ONNX (M1)
 
 plc:             ## Run the simulated PLC (OPC UA server) locally on port 4840
 	$(PY) -m plc_sim.server
+
+edge:            ## Run the edge app locally (needs a PLC and the broker)
+	$(PY) -m edge_app.main
+
+broker:          ## Start only the MQTT broker (Docker)
+	docker compose up -d mosquitto
 
 up:              ## Start all services with Docker compose (M6)
 	docker compose up -d --build
@@ -42,3 +48,7 @@ check-m1:        ## Milestone 1 check: ONNX models, quality, latency
 
 check-m2:        ## Milestone 2 check: PLC simulator OPC UA interface
 	$(PY) tests/check_m2.py
+
+check-m3:        ## Milestone 3 check: PLC -> edge app -> write-back + MQTT, 500 readings
+check-m3: broker
+	$(PY) tests/check_m3.py
