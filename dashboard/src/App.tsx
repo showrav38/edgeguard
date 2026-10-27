@@ -1,7 +1,7 @@
 // EdgeGuard dashboard: one machine, two views of the same live data.
 //   Operator view (default): traffic light + one sentence, what to do and why, risk gauge,
 //     risk and tool-wear charts, alarm history as sentences. Readable in 5 seconds.
-//   Engineer view: data-flow strip, latency, buffer, drift numbers, all signal charts, demo controls.
+//   Engineer view: data-flow strip, latency, buffer, drift numbers, all signal charts, demo controls, robot cell (ROS 2).
 // "Guided demo" opens a 4-step tour that lies over the "Recent alarms" card (never over the charts).
 //
 // Stable layout (docs/decisions.md D-27): every card and button has a fixed place and size in both views.
@@ -9,7 +9,7 @@
 // e2e/layout.e2e.ts checks this in a headless browser.
 import { useState } from "react";
 import { AlarmHistory } from "./components/AlarmHistory";
-import { ActionCard, DataQuality, StatusCard } from "./components/Cards";
+import { ActionCard, DataQuality, RobotCell, StatusCard } from "./components/Cards";
 import { Charts, OperatorCharts } from "./components/Charts";
 import { DemoControls } from "./components/DemoControls";
 import { FlowStrip } from "./components/FlowStrip";
@@ -32,7 +32,7 @@ function loadMode(): Mode {
 
 export default function App() {
   const { screen, paused, togglePause, send, ack } = useEdgeGuard();
-  const { view, status, statusAt, connection, received, duplicates, now } = screen;
+  const { view, status, statusAt, robot, connection, received, duplicates, now } = screen;
   const [mode, setModeState] = useState<Mode>(loadMode);
   const [tour, setTour] = useState(false);
   const heartbeatFresh = statusAt != null && now - statusAt < HEARTBEAT_TIMEOUT_MS;
@@ -73,6 +73,7 @@ export default function App() {
             <Charts points={view.points} threshold={status?.threshold} />
             <AlarmHistory view={view} />
             <DemoControls status={status} enabled={edgeRunning} send={send} />
+            <RobotCell robot={robot} now={now} />
           </div>
         )}
       </main>

@@ -5,7 +5,7 @@ import { IxIcon, IxIconButton, IxTooltip } from "@siemens/ix-react";
 import {
   iconBulb, iconChevronLeft, iconChevronRight, iconClose, iconCloudUpload, iconError, iconGauge, iconHistory,
   iconHourglass, iconInfo, iconLightDark, iconMaintenance, iconMonitor, iconPause, iconPcTower, iconPlay, iconPlc,
-  iconQuestion, iconSingleCheck, iconSuccess, iconTrend, iconWarning,
+  iconQuestion, iconRoboticArm, iconSingleCheck, iconSuccess, iconTrend, iconWarning,
 } from "@siemens/ix-icons/icons";
 import { useId, type ReactNode } from "react";
 
@@ -32,6 +32,7 @@ export const ICON = {
   edge: iconPcTower,
   uplink: iconCloudUpload,
   screen: iconMonitor,
+  robot: iconRoboticArm,
 };
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "idle";
@@ -108,6 +109,9 @@ export const GLOSSARY = {
   alarmRate: (floodPerHour: number) => "alarms per hour over the last 10 minutes. ISA-18.2 (alarm management) "
     + `calls more than 10 alarms in 10 minutes (${floodPerHour} per hour) an alarm flood; a manageable average is `
     + "about 6 per hour. The low cost-based threshold gives far more on this replay.",
+  robot: "a simulated robot loads parts into Machine 1. The ROS 2 node cell_guard stops it while an alarm is "
+    + "not acknowledged (an interlock: a person must check the machine first); Acknowledge lets it run again. "
+    + "The robot also stops if the interlock signal is missing.",
   latency: "how long a step takes. Low and steady is good.",
   pause: "freezes the screen so you can read it. New readings keep arriving in the background; "
     + "Resume shows them all at once.",

@@ -207,6 +207,10 @@ th.num, td.num { text-align: right; }
 th:first-child, td:first-child { text-align: left; }
 
 .demo { height: 336px; }
+
+/* Robot cell: one full-width row, the 3 facts side by side (stacked on narrow screens). */
+.robot { grid-column: 1 / -1; height: 136px; }
+.robot .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: var(--theme-space-4); }
 .control-row { display: flex; align-items: center; justify-content: space-between; gap: var(--theme-space-1); height: 40px; }
 .btn-demo { width: 176px; }
 .control-row.stacked { flex-direction: column; align-items: flex-start; justify-content: center; height: 72px; }
@@ -248,6 +252,8 @@ th:first-child, td:first-child { text-align: left; }
   .todo, .eng .history, .hero, .history { grid-column: 1 / -1; }
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .charts, .charts-2 { grid-template-columns: minmax(0, 1fr); }
+  .robot { height: 200px; }
+  .robot .facts { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
   .content { padding: var(--theme-space-3); }

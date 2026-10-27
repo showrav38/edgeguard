@@ -1,8 +1,8 @@
 """M6 check: the whole stack comes up with `docker compose`, every service is healthy, telemetry reaches MQTT.
 
   A. `docker compose up -d --build --wait`: builds the images, starts mosquitto -> plc_sim -> edge_app ->
-     dashboard (each waits for the previous one's healthcheck)
-  B. all 4 services report "healthy"
+     ros2 + dashboard (each waits for the previous one's healthcheck)
+  B. all 5 services report "healthy" (ros2 since M7b)
   C. a telemetry message arrives on edgeguard/machine1/telemetry within 15 s
   D. the dashboard is served by nginx on http://localhost:8080
   E. `docker compose down` (always, also after a failure; volumes are kept)
@@ -16,7 +16,7 @@ import urllib.request
 
 import paho.mqtt.client as mqtt
 
-SERVICES = ["mosquitto", "plc_sim", "edge_app", "dashboard"]
+SERVICES = ["mosquitto", "plc_sim", "edge_app", "ros2", "dashboard"]
 TOPIC_TELEMETRY = "edgeguard/machine1/telemetry"
 DASHBOARD_URL = "http://localhost:8080/"
 

@@ -1,5 +1,5 @@
 # EdgeGuard: the full edge stack. `docker compose up -d --build --wait` (or `make up`).
-# Start order via healthchecks: mosquitto -> plc_sim -> edge_app -> dashboard.
+# Start order via healthchecks: mosquitto -> plc_sim -> edge_app -> ros2 + dashboard.
 # Dashboard: http://localhost:8080 (the browser talks MQTT to ws://localhost:9001 itself).
 services:
   mosquitto:
@@ -62,6 +62,24 @@ services:
       timeout: 8s
       retries: 10
       start_period: 5s
+    restart: unless-stopped
+
+  ros2:
+    # ROS 2 Jazzy: cell_guard (alarm -> /robot_cell/stop interlock) and robot_sim (ros2/edgeguard_ros).
+    build: { context: ., dockerfile: docker/ros2.Dockerfile }
+    image: edgeguard-ros2
+    environment:
+      MQTT_HOST: mosquitto
+      ROBOT_PART_EVERY_S: ${ROBOT_PART_EVERY_S:-2}
+    depends_on:
+      edge_app: { condition: service_healthy }
+    healthcheck:
+      # Healthy = robot_sim gets the interlock from cell_guard over ROS 2 (ros2/healthcheck.sh).
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 10s
     restart: unless-stopped
 
   dashboard:

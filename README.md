@@ -63,7 +63,8 @@ flowchart LR
 
 Start order in `docker compose`, each step waits for the previous healthcheck:
 **mosquitto** (answers a subscribe) → **plc_sim** (OPC UA port open) → **edge_app** (fresh "running" heartbeat
-with the PLC connected, `edge_app/healthcheck.py`) → **dashboard** (nginx serves the page).
+with the PLC connected, `edge_app/healthcheck.py`) → **ros2** (robot_sim receives the interlock from cell_guard,
+`ros2/healthcheck.sh`) and **dashboard** (nginx serves the page).
 
 | Operator view | Engineer view | Guided demo |
 |---|---|---|
@@ -76,6 +77,42 @@ with the PLC connected, `edge_app/healthcheck.py`) → **dashboard** (nginx serv
 The dashboard is built with [Siemens iX](https://github.com/siemens/ix) (open-source design system, MIT), open "classic"
 theme (dark default, light). It is not a Siemens product and uses no Siemens brand theme or logo. Its layout never moves:
 every card and button keeps its place and size in every state (docs/decisions.md D-27), checked in a headless browser.
+
+## ROS 2 integration
+A simulated robot loads parts into Machine 1. When EdgeGuard raises an alarm, the robot must stop until a person
+has checked the machine. This runs in a ROS 2 Jazzy container (`ros2/edgeguard_ros`, decision D-31).
+
+The ROS 2 words, in plain terms:
+- **Node:** one small program with one job. Here there are two: `cell_guard` and `robot_sim`.
+- **Topic:** a named channel, like `/robot_cell/stop`. Nodes do not call each other; they talk through topics.
+- **Message:** the typed data sent on a topic. `std_msgs/Bool` is just true or false; `std_msgs/String` is a text.
+- **Publisher / subscriber:** a node that sends on a topic / a node that receives from it. A topic can have
+  any number of each, and ROS 2 finds them automatically (discovery), so `ros2 topic echo` can listen in too.
+- **Interlock:** a rule that blocks a machine from running while a condition is unsafe. Here: the robot cell
+  stops while an alarm is active and not acknowledged, and stays stopped after the readings return to normal
+  until someone presses Acknowledge (a latch, like a reset button on a real machine).
+
+```mermaid
+flowchart LR
+    E["edge_app"] -- "MQTT telemetry<br/>(alarm per reading)" --> G
+    D["Dashboard<br/>Acknowledge button"] -- "MQTT edgeguard/machine1/ack" --> G
+    subgraph ros["ros2 container (ROS 2 Jazzy)"]
+        G["cell_guard node"] -- "/machine1/alarm<br/>std_msgs/Bool" --> Z["any subscriber<br/>e.g. ros2 topic echo"]
+        G -- "/robot_cell/stop<br/>std_msgs/Bool (interlock)" --> R["robot_sim node"]
+        R -- "/robot_cell/state<br/>std_msgs/String" --> Z
+    end
+    R -- "MQTT edgeguard/robot_cell/status<br/>running / stopped, parts" --> D
+```
+
+- **cell_guard** is the bridge: it subscribes to the EdgeGuard telemetry and the acknowledge over MQTT and publishes
+  `/machine1/alarm` (the newest reading is an alarm) and `/robot_cell/stop` (the interlock) 5 times a second.
+  The rule itself is in `interlock.py`, plain Python with unit tests (`tests/test_interlock.py`).
+- **robot_sim** subscribes to `/robot_cell/stop`. State "running" (loads one part every 2 s) or "stopped by
+  EdgeGuard". If the stop messages stop coming (cell_guard or ROS down), it stops too: no interlock signal, no motion.
+  It reports its state over MQTT for the Engineer view's "Robot cell" card.
+- Try it: `docker compose exec ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic echo /robot_cell/stop"`.
+  `make check-m7b` triggers an alarm, checks with `ros2 topic echo` that the robot stops, acknowledges, and checks
+  that it runs again.
 
 ## Results
 Time-based split by UDI (train = past, test = future; see docs/decisions.md D-20). Test set: UDI 8001–10000,
@@ -116,7 +153,7 @@ Needs Docker (with compose) and, for training and the demo/check scripts, Python
 make venv            # once: .venv with Python 3.11
 # put the dataset at data/ai4i2020.csv (not in git), then:
 make train           # models/*.onnx + model_info.json, data/{train,val,test}.csv
-make up              # build + start the stack, wait until all 4 services are healthy
+make up              # build + start the stack, wait until all 5 services are healthy
                      # dashboard: http://localhost:8080
 make demo            # starts the stack (if needed) and runs the 2-minute scripted demo
 make down            # stop everything
@@ -128,7 +165,8 @@ guided tour: (1) normal operation, (2) 10× replay until a tool-wear alarm with 
 (3) drift mode until the drift warning, (4) a 20 s simulated uplink outage with buffered / lost / in-order counts.
 Open the dashboard next to the console to screen-record it.
 
-Checks (each prints PASS or FAIL): `make check-m0` … `make check-m6`, unit tests `make test`.
+Checks (each prints PASS or FAIL): `make check-m0` … `make check-m6`, `make check-m7b` (ROS 2 robot cell),
+unit tests `make test`.
 Dashboard: `cd dashboard && npm test` (unit tests) and `npm run test:e2e` (layout test: records the box of every card and
 button in both views, at desktop and phone width, through OK / attention / alarm / drift / outage / acknowledged / paused,
 and fails if anything moves or resizes by more than 2 px; runs in the Playwright Docker image with a private broker).
@@ -160,6 +198,7 @@ set `OPCUA_URL`, `MQTT_HOST`, `MODELS_DIR` (`/app/models`, mounted read-only) an
 | `MQTT_CLIENT_ID` | `edgeguard-edge` | edge_app | must be unique per broker |
 | `STATUS_INTERVAL_S` | `1.0` | edge_app | status heartbeat interval (PLC / edge / uplink health) |
 | `DEMO_COMMANDS` | `1` | edge_app | `0` = ignore the demo command topic `edgeguard/machine1/cmd` |
+| `ROBOT_PART_EVERY_S` | `2` | ros2 (robot_sim) | one part loaded every N seconds while running |
 | `VITE_MQTT_URL` | `ws://<page host>:9001` | dashboard | MQTT websocket URL (set at build time) |
 | `ACK_COOLDOWN_S` (`VITE_ACK_COOLDOWN_S`) | `60` | dashboard | after Acknowledge, repeats of the same failure type are listed and counted but do not raise the alarm again for this long (build time) |
 
@@ -187,7 +226,11 @@ set `OPCUA_URL`, `MQTT_HOST`, `MODELS_DIR` (`/app/models`, mounted read-only) an
   the model has no power feature, so a power failure is explained by torque and temperature (D-11).
 - **Drift detection** looks at window means per signal only; a shift smaller than ~2.35 std is not flagged.
 - **Simulated outage in the demo.** `make demo` cuts the uplink inside the edge app (same buffering code path);
-  the real broker stop is tested in `make check-m4`. Alarm acknowledgement lives in one browser tab.
+  the real broker stop is tested in `make check-m4`. Alarm acknowledgement lives in one browser tab; it is also
+  published over MQTT so the robot interlock can be released, but another tab does not see it.
+- **The robot interlock is not a safety function.** It runs over MQTT and ROS 2 without safety-rated hardware or
+  protocols (a real cell would use a safety PLC and e.g. PROFIsafe); it shows the logic, not certified protection.
+  It applies no cool-down (D-31), so with v1's alarm flood the robot stops about every 12 s at 1x replay.
 
 ## What I learned (ME)
 _TODO (ME): write in my own words._
@@ -202,7 +245,6 @@ _TODO (ME): write in my own words._
   partly name derived values (see D-03, D-07). This is also the real fix for the alarm flood (see Honest limits,
   D-28): v2 should separate the many near-limit false alarms (e.g. 8.6 kW) from real failures; measure the alarm
   rate and false share on the replay before and after the swap.
-- **M7 (b): ROS 2 Jazzy node `cell_guard`:** on alarm publish `/robot_cell/stop` (`std_msgs/Bool`).
 - **Security:** OPC UA with certificates (Basic256Sha256), MQTT with TLS, users and ACLs.
 - **Alarm state in the edge app / PLC** instead of the browser, so acknowledgement is shared across screens.
 - **Real machine data**, and retraining when drift persists.

@@ -1,9 +1,10 @@
-// Engineer view cards: machine state (with Acknowledge), what to do with the 2 top factors, and data quality (drift).
+// Engineer view cards: machine state (with Acknowledge), what to do with the 2 top factors, data quality (drift)
+// and the robot cell (ROS 2).
 // Fixed sizes: the content changes with the state, the card and its buttons never move.
 import { IxButton } from "@siemens/ix-react";
 import { FAILURE_TYPES, pct, SIGNALS, signalValue } from "../format";
 import type { LatchedAlarm, View } from "../stream";
-import type { Telemetry } from "../types";
+import type { RobotStatus, Telemetry } from "../types";
 import { canAck, latchLine } from "./Operator";
 import { Card, GLOSSARY, Help, ICON, StateLabel, Waiting, type Tone } from "./ui";
 
@@ -109,6 +110,36 @@ export function DataQuality({ m }: { m: Telemetry | null }) {
         <div className="tall"><dt>Signals outside training</dt><dd>{m ? names : "–"}</dd></div>
         <div><dt>Inference + explanation</dt><dd className="num">{m ? `${m.inference_ms.toFixed(2)} ms` : "–"}</dd></div>
         <div><dt>Missed PLC cycles</dt><dd className="num">{m ? m.missed_cycles.toLocaleString("en-US") : "–"}</dd></div>
+      </dl>
+    </Card>
+  );
+}
+
+const ROBOT_STALE_MS = 3000; // robot_sim publishes every 0.5 s
+
+/**
+ * Robot cell (ROS 2, D-31): a simulated robot that loads parts into Machine 1. The ROS 2 node cell_guard stops it
+ * while an alarm is not acknowledged (interlock); the node robot_sim reports its state over MQTT.
+ * Fixed size: one full-width row; only text and colour change.
+ */
+export function RobotCell({ robot, now }: { robot: RobotStatus | null; now: number }) {
+  const stale = !robot?.ts || now - Date.parse(robot.ts) > ROBOT_STALE_MS;
+  const known = robot && robot.state !== "offline" && !stale;
+  const { tone, label }: { tone: Tone; label: string } =
+    !robot ? { tone: "idle", label: "No data from the robot cell" }
+    : !known ? { tone: "idle", label: "Robot cell offline" }
+    : robot.state === "running" ? { tone: "ok", label: "Running" }
+    : robot.reason === "stopped by EdgeGuard" ? { tone: "warn", label: "Stopped by EdgeGuard" }
+    : { tone: "warn", label: "Stopped: no interlock signal" };
+  const interlock = !known ? "–" : robot.reason === "stopped by EdgeGuard" ? "on until Acknowledge" : robot.state === "running" ? "off" : "missing";
+  return (
+    <Card box="robot-cell" title="Robot cell (ROS 2)" icon={ICON.robot} className="robot" tone={known && robot.state !== "running" ? "warn" : undefined}
+          help={<Help term="Robot cell" box="help-robot">{GLOSSARY.robot}</Help>}>
+      <div className="eng-state"><StateLabel tone={tone}>{label}</StateLabel></div>
+      <dl className="facts">
+        <div><dt>Parts loaded</dt><dd className="num">{known && robot.parts != null ? robot.parts.toLocaleString("en-US") : "–"}</dd></div>
+        <div><dt>Interlock</dt><dd className="num">{interlock}</dd></div>
+        <div><dt>Last update</dt><dd className="num">{robot?.ts ? clock(robot.ts) : "–"}</dd></div>
       </dl>
     </Card>
   );

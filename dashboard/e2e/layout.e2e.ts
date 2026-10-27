@@ -22,6 +22,12 @@ const status = () => ({
   edge: { inference_ms: 0.6 }, uplink, last_command: null,
 });
 
+// edgeguard/robot_cell/status, shaped like ros2/edgeguard_ros/edgeguard_ros/robot_sim.py
+let robot = { state: "running", reason: "running", parts: 12 };
+const robotStatus = () => ({ ...robot, ts: new Date().toISOString() });
+const ROBOT_STOPPED = { state: "stopped", reason: "stopped by EdgeGuard", parts: 1234 };
+const ROBOT_RUNNING = { state: "running", reason: "running", parts: 1234 };
+
 let seq = 0;
 function reading(o: { risk?: number; state?: string; type?: string; code?: number; text?: string; wear?: number;
                       drift?: boolean; buffered?: boolean; truth?: boolean } = {}) {
@@ -114,10 +120,15 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
     test(`${mode} view, ${viewport.name}: nothing moves`, async ({ page }) => {
       seq = 0;
       uplink = { ...uplink, state: "up", buffer_backlog: 0, outage_remaining_s: 0 };
+      robot = { state: "running", reason: "running", parts: 12 };
       const client = await mqtt.connectAsync("ws://localhost:19001", { clientId: `layout-${mode}-${viewport.name}` });
       // Clear retained status from an earlier test, then keep a fresh heartbeat going (the dashboard needs one < 3 s old).
       await client.publishAsync(`${T}/status`, "", { retain: true });
-      const beat = setInterval(() => client.publish(`${T}/status`, JSON.stringify(status()), { retain: true }), 500);
+      await client.publishAsync("edgeguard/robot_cell/status", "", { retain: true });
+      const beat = setInterval(() => {
+        client.publish(`${T}/status`, JSON.stringify(status()), { retain: true });
+        client.publish("edgeguard/robot_cell/status", JSON.stringify(robotStatus()), { retain: true });
+      }, 500);
       const send = async (...ms: object[]) => {
         for (const m of ms) await client.publishAsync(`${T}/telemetry`, JSON.stringify(m), { qos: 1 });
       };
@@ -158,20 +169,24 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await send(reading(WARNING));
         await check("attention", mode === "operator" ? "Attention soon" : "WARNING");
         await send(reading(ALARM), reading(ALARM));
+        robot = ROBOT_STOPPED;
         await check("alarm", mode === "operator" ? "likely to fail soon" : "ALARM");
         await send(reading({ wear: 216 }));
         await check("alarm cleared, not acknowledged", "needs your check");
         await send(...Array.from({ length: 5 }, () => reading({ drift: true, wear: 20 })));
         await check("drift", mode === "operator" ? "unusual conditions" : "Drift: predictions may be unreliable");
         uplink = { ...uplink, state: "simulated_down", outage_remaining_s: 14, buffer_backlog: 57 };
+        robot = { state: "stopped", reason: "stopped: no interlock signal", parts: 1234 };
         await check("outage", mode === "engineer" ? "outage (simulated)" : undefined);
         uplink = { ...uplink, state: "up", outage_remaining_s: 0, buffer_backlog: 43 };
         await send(...Array.from({ length: 5 }, () => reading({ buffered: true, wear: 30 })));
+        robot = ROBOT_STOPPED;
         await check("buffer draining", mode === "engineer" ? "sending 43 stored" : undefined);
         uplink = { ...uplink, buffer_backlog: 0 };
         await send(reading(ALARM));
         await page.waitForTimeout(TICK_WAIT_MS);
         await page.locator(`[data-box="ack-${mode}"]`).click();
+        robot = ROBOT_RUNNING;
         await check("alarm acknowledged", "Acknowledged");
         for (let i = 0; i < 10; i++) await send(reading({ ...ALARM, truth: i % 2 === 0 }), reading({ wear: 10 }));
         await check("many alarms (cool-down)", mode === "operator" ? "alarms in the last" : "no, cool-down");

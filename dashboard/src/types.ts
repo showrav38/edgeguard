@@ -61,6 +61,14 @@ export interface Status {
   last_command?: { cmd?: string; ok: boolean; error?: string } | null;
 }
 
+// edgeguard/robot_cell/status (retained): from the ROS 2 node robot_sim (ros2/edgeguard_ros/robot_sim.py).
+export interface RobotStatus {
+  state: "running" | "stopped" | "offline";
+  reason: string; // "running", "stopped by EdgeGuard", "stopped: no interlock signal", "robot_sim not running"
+  parts: number | null; // parts loaded since robot_sim started
+  ts?: string;
+}
+
 // edgeguard/machine1/cmd (see edge_app/commands.py)
 export type Command =
   | { cmd: "drift"; on: boolean }

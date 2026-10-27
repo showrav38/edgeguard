@@ -308,3 +308,19 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Alternatives:** keep the panel floating (covers charts); a side drawer (moves the layout).
 - **Why:** when everything is red, nothing is. The layout test now also fails if the tour covers a chart, or if
   the Engineer phone view clips any text or scrolls sideways.
+
+### D-31 — ROS 2 robot cell: interlock in a bridge node (M7b)
+- **Decision:** a ROS 2 Jazzy container (`ros:jazzy-ros-base`) with one package and two rclpy nodes. `cell_guard`
+  reads telemetry and the acknowledge over MQTT and publishes `/machine1/alarm` and `/robot_cell/stop`
+  (`std_msgs/Bool`, 5 Hz); `robot_sim` stops on `/robot_cell/stop` and reports its state back over MQTT. The stop
+  latches on an ALARM reading and is released only by Acknowledge (published by the dashboard with the time of
+  the newest reading the operator saw); readings and acknowledges are ordered by the edge app's `ts`, not `seq`
+  (which restarts with the PLC simulator). No cool-down. robot_sim also stops when stop messages are missing (2 s).
+- **Alternatives:** the edge app publishing ROS 2 itself (would put ROS into the slim Python image); a ROS–MQTT
+  bridge package such as `mqtt_client` (less code, but the interlock rule would sit somewhere else); stop only
+  while the current reading is an ALARM (one-reading pulses: the robot would restart without anyone checking);
+  apply the dashboard's 60 s cool-down (a safety function must not hide an alarm).
+- **Why:** the interlock rule is ~20 lines of plain Python (`interlock.py`), unit-tested without ROS; ROS stays
+  in its own container. Publishing on a timer doubles as a heartbeat, so a dead `cell_guard` stops the robot
+  (fail-safe). Limits: not a safety function (no safety PLC, no PROFIsafe); with v1's alarm flood the robot stops
+  about every 12 s at 1x, which makes the cost of false alarms visible and is one more reason for model v2.

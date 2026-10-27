@@ -3,7 +3,7 @@
 
 PY := .venv/bin/python
 
-.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 plc edge broker dashboard
+.PHONY: help venv train up down test demo check-m0 check-m1 check-m2 check-m3 check-m4 check-m5 check-m6 check-m7b plc edge broker dashboard
 
 help:            ## Show this list
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/ —/'
@@ -69,3 +69,6 @@ check-m5: broker
 
 check-m6:        ## Milestone 6 check: docker compose up, all healthy, telemetry on MQTT, compose down
 	$(PY) tests/check_m6.py
+
+check-m7b:       ## Milestone 7b check: alarm -> ROS 2 /robot_cell/stop -> robot_sim stops; acknowledge -> runs again
+	$(PY) tests/check_m7b.py

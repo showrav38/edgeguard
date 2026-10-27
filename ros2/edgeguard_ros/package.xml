@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!-- ROS 2 package manifest: name, version and what the package needs at run time. -->
+<package format="3">
+  <name>edgeguard_ros</name>
+  <version>0.1.0</version>
+  <description>EdgeGuard robot cell: cell_guard (MQTT alarm -> /robot_cell/stop interlock) and robot_sim.</description>
+  <maintainer email="showravsaha38@gmail.com">Showrav Saha</maintainer>
+  <license>MIT</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
