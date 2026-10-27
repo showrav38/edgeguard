@@ -67,7 +67,8 @@ async def read_plc_outputs() -> dict:
     await client.connect()
     try:
         ns = await client.get_namespace_index("urn:edgeguard:plc")
-        names = ["LastSeqProcessed", "FailureRisk", "Alarm", "ActionCode", "ModelVersion", "InferenceMs"]
+        names = ["LastSeqProcessed", "FailureRisk", "Alarm", "ActionCode", "ModelVersion", "InferenceMs",
+                 "AlarmLatched", "AlarmAcknowledged"]
         values = await client.read_values([client.get_node(ua.NodeId(f"Machine1.{n}", ns)) for n in names])
         return dict(zip(names, values))
     finally:
@@ -179,8 +180,11 @@ def main() -> int:
               and outputs["ActionCode"] == last_msg["action"]["code"] and outputs["ModelVersion"] == info["model_version"])
     else:  # stopped between write-back and publish: PLC is one row ahead of MQTT
         ok = outputs["LastSeqProcessed"] == last_msg["seq"] + 1
-    check(ok, f"PLC write-back: LastSeqProcessed={outputs['LastSeqProcessed']} (last MQTT seq {last_msg['seq']}), "
-              f"FailureRisk={outputs['FailureRisk']:.4f}, ModelVersion={outputs['ModelVersion']}")
+    # Alarm state machine (D-32): nobody acknowledges in this check, so any ALARM leaves an alarm latched.
+    latch_ok = (outputs["AlarmLatched"] or not live_alarm.any()) and outputs["AlarmAcknowledged"] is False
+    check(ok and latch_ok, f"PLC write-back: LastSeqProcessed={outputs['LastSeqProcessed']} (last MQTT seq "
+              f"{last_msg['seq']}), FailureRisk={outputs['FailureRisk']:.4f}, ModelVersion={outputs['ModelVersion']}, "
+              f"AlarmLatched={outputs['AlarmLatched']}, AlarmAcknowledged={outputs['AlarmAcknowledged']}")
 
     # 6. End-to-end latency, measured in the PLC process.
     lat = {}

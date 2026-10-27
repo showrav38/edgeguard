@@ -105,12 +105,14 @@ export const GLOSSARY = {
   toolWear: "how many minutes the current cutting tool has been in use. It goes back to 0 when the tool is replaced.",
   acknowledge: "confirms that you have seen the alarm. An alarm stays on screen until someone acknowledges it, "
     + "even if the readings return to normal. For a short cool-down after that, repeats of the same failure type "
-    + "are listed in the history and counted, but do not raise the alarm again.",
+    + "are listed in the history and counted, but do not raise the alarm again. The edge app keeps this state, "
+    + "so every screen and the robot cell show the same.",
   alarmRate: (floodPerHour: number) => "alarms per hour over the last 10 minutes. ISA-18.2 (alarm management) "
     + `calls more than 10 alarms in 10 minutes (${floodPerHour} per hour) an alarm flood; a manageable average is `
     + "about 6 per hour. The low cost-based threshold gives far more on this replay.",
   robot: "a simulated robot loads parts into Machine 1. The ROS 2 node cell_guard stops it while an alarm is "
-    + "not acknowledged (an interlock: a person must check the machine first); Acknowledge lets it run again. "
+    + "not acknowledged (an interlock: a person must check the machine first); Acknowledge lets it run again, "
+    + "and a repeat of the same failure type during the cool-down does not stop it again. "
     + "The robot also stops if the interlock signal is missing.",
   latency: "how long a step takes. Low and steady is good.",
   pause: "freezes the screen so you can read it. New readings keep arriving in the background; "

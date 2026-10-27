@@ -32,6 +32,31 @@ export interface Telemetry {
   buffer_dropped: number;
   ground_truth: { failure: boolean; type: string };
   missed_cycles: number;
+  alarm_suppressed?: boolean; // ALARM during the cool-down of its type: recorded, not latched (edge_app/alarms.py)
+}
+
+// edgeguard/machine1/alarm_state (retained): the edge app's alarm state machine (edge_app/alarms.py, D-32).
+// The ONE source of truth for latch, acknowledge and cool-down: every dashboard and the robot cell follow it.
+export type AlarmTypeState = "NORMAL" | "ACTIVE" | "WAITING_FOR_ACK" | "COOLDOWN";
+
+export interface AlarmTypeInfo {
+  state: AlarmTypeState;
+  acknowledged: boolean;
+  start_ts: string | null; // latched alarm: first ALARM reading
+  end_ts: string | null; // WAITING_FOR_ACK: when the readings left ALARM
+  peak: Telemetry | null; // latched alarm: its highest-risk reading
+  cooldown_until: string | null;
+  group: { count: number; since: string | null }; // "N alarms in the last X min"
+}
+
+export interface AlarmState {
+  ts: string;
+  latched: boolean;
+  acknowledged: boolean; // latched and nothing waits for an Acknowledge (the robot stops while latched && !acknowledged)
+  active: boolean;
+  types: Record<string, AlarmTypeInfo>;
+  counters: { total: number; false: number; last_10min: number; watched_s: number };
+  cooldown_s: number;
 }
 
 // edgeguard/machine1/status (retained): heartbeat every second, NOT buffered.
@@ -73,4 +98,5 @@ export interface RobotStatus {
 export type Command =
   | { cmd: "drift"; on: boolean }
   | { cmd: "outage"; seconds: number }
-  | { cmd: "speed"; cycle_ms: number };
+  | { cmd: "speed"; cycle_ms: number }
+  | { cmd: "ack"; type: string | null; ts: string | null }; // Acknowledge: decided by the edge app

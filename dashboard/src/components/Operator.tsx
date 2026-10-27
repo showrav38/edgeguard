@@ -40,7 +40,8 @@ export function StatusHero({ view, live, paused, now, onAck }: {
   onAck: () => void;
 }) {
   const { latest, latched } = view;
-  const h = headline(latest, latched, live, view.alarms, now);
+  const group = latest ? view.alarmState?.types[latest.failure_type]?.group ?? null : null;
+  const h = headline(latest, latched, live, group, now);
   const tone = LIGHT_TONE[h.light];
   // The sentence already says "unusual conditions" when drift is the only thing going on.
   const showDrift = live && !!latest?.drift_warning && (!!latched || latest.state !== "OK");

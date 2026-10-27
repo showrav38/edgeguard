@@ -1,8 +1,7 @@
 """cell_guard: the bridge from EdgeGuard (MQTT) to the robot cell (ROS 2).
 
-  MQTT in:   edgeguard/machine1/telemetry  (one reading per PLC cycle, from the edge app)
-             edgeguard/machine1/ack        (the operator pressed Acknowledge on the dashboard)
-  ROS 2 out: /machine1/alarm     std_msgs/Bool  the newest reading is an ALARM
+  MQTT in:   edgeguard/machine1/alarm_state  (retained; the edge app's alarm state machine, D-32)
+  ROS 2 out: /machine1/alarm     std_msgs/Bool  an alarm is active right now
              /robot_cell/stop    std_msgs/Bool  the interlock: true while an alarm is latched and
                                                 not acknowledged (rule in interlock.py)
 
@@ -24,8 +23,7 @@ from edgeguard_ros.interlock import Interlock
 
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-TOPIC_TELEMETRY = "edgeguard/machine1/telemetry"
-TOPIC_ACK = "edgeguard/machine1/ack"
+TOPIC_ALARM_STATE = "edgeguard/machine1/alarm_state"
 PUBLISH_PERIOD_S = 0.2
 
 
@@ -46,7 +44,7 @@ class CellGuard(Node):
 
         def on_connect(c, userdata, flags, reason_code, properties):
             # Subscribe again on every (re)connect: the broker forgets non-persistent sessions.
-            c.subscribe([(TOPIC_TELEMETRY, 1), (TOPIC_ACK, 1)])
+            c.subscribe(TOPIC_ALARM_STATE, 1)  # retained: the current state arrives at once
             self.get_logger().info(f"MQTT connected to {MQTT_HOST}:{MQTT_PORT}")
 
         client.on_connect = on_connect
@@ -60,11 +58,7 @@ class CellGuard(Node):
         while not self.inbox.empty():
             topic, payload = self.inbox.get()
             try:
-                m = json.loads(payload)
-                if topic == TOPIC_TELEMETRY:
-                    self.interlock.on_telemetry(m["ts"], bool(m["alarm"]))
-                elif topic == TOPIC_ACK:
-                    self.interlock.on_ack(m.get("ts"))
+                self.interlock.on_alarm_state(json.loads(payload))
             except (ValueError, KeyError, TypeError) as ex:
                 self.get_logger().warning(f"ignored bad message on {topic}: {ex}")
         if self.interlock.stop != was_stop:

@@ -209,7 +209,7 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Limit:** a real shift smaller than ~2.35 std is not flagged, and a hotter season than any in the data would still
   look like drift.
 
-### D-22 — Dashboard alarms latch until acknowledged; acknowledgement is per browser (review after M5)
+### D-22 — Dashboard alarms latch until acknowledged; acknowledgement is per browser (review after M5) — superseded by D-32
 - **Decision:** the first ALARM reading latches the alarm with its start time, duration and the action of its
   highest-risk reading; it stays after the readings clear ("cleared, not acknowledged"). Acknowledge while active ->
   "acknowledged", removed when the readings leave ALARM. Logic in `stream.ts`, unit-tested.
@@ -273,7 +273,7 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Limits:** the theme's own font is not in the open-source package (system UI font instead); the JS bundle grew to
   ~1.2 MB. (The guided demo panel used to float over the charts; since D-30 it lies over the alarm history.)
 
-### D-28 — Alarm flood: cool-down after Acknowledge, grouped repeats, alarm rate (dashboard only)
+### D-28 — Alarm flood: cool-down after Acknowledge, grouped repeats, alarm rate (dashboard only) — moved to the edge app in D-32
 - **Decision:** after Acknowledge, the same failure type does not latch again for `ACK_COOLDOWN_S` (default 60 s).
   Those alarms are still recorded (marked "no, cool-down" in the Engineer table) and counted. The Operator history
   groups repeats of one type ("Power problem: 4 alarms in the last 3 min"; a gap over 5 min starts a new group). The
@@ -309,7 +309,7 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Why:** when everything is red, nothing is. The layout test now also fails if the tour covers a chart, or if
   the Engineer phone view clips any text or scrolls sideways.
 
-### D-31 — ROS 2 robot cell: interlock in a bridge node (M7b)
+### D-31 — ROS 2 robot cell: interlock in a bridge node (M7b) — interlock rule replaced by D-32
 - **Decision:** a ROS 2 Jazzy container (`ros:jazzy-ros-base`) with one package and two rclpy nodes. `cell_guard`
   reads telemetry and the acknowledge over MQTT and publishes `/machine1/alarm` and `/robot_cell/stop`
   (`std_msgs/Bool`, 5 Hz); `robot_sim` stops on `/robot_cell/stop` and reports its state back over MQTT. The stop
@@ -324,3 +324,23 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
   in its own container. Publishing on a timer doubles as a heartbeat, so a dead `cell_guard` stops the robot
   (fail-safe). Limits: not a safety function (no safety PLC, no PROFIsafe); with v1's alarm flood the robot stops
   about every 12 s at 1x, which makes the cost of false alarms visible and is one more reason for model v2.
+
+### D-32 — Alarm state owned by the edge app: one state machine, followed by dashboards, PLC and robot
+- **Decision:** `edge_app/alarms.py` runs one state machine per failure type (NORMAL → ACTIVE → WAITING_FOR_ACK →
+  COOLDOWN → NORMAL; Acknowledge while ACTIVE keeps it shown until the readings clear) with the D-28 rules (60 s
+  cool-down per type, groups "N alarms in the last X min", every alarm counted). The edge app publishes it retained
+  on `edgeguard/machine1/alarm_state` on every change and writes `AlarmLatched` / `AlarmAcknowledged` to the PLC.
+  Acknowledge is a validated `{"cmd": "ack", "type", "ts"}` on the command topic (ignored if nothing waits; `ts` =
+  newest reading the operator saw, so an unseen alarm is not acknowledged). The dashboard and `cell_guard` only
+  display / follow it: stop = latched and not acknowledged. Telemetry carries `alarm_suppressed` for the history.
+- **Evidence:** the latch lived in each browser (D-22, D-28) and `cell_guard` had its own copy without cool-down
+  (D-31): two tabs could disagree, and the robot stopped on every repeat. Replay, operator acknowledges after 10 s
+  (`scripts/robot_stops.py`): 18.3 robot stops per 10 min before, 12.3 after (30 s: 11.7 → 8.1). The rest are
+  alarms of other types, which must still stop it.
+- **Alternatives:** keep the state in the browser and sync tabs (no single owner, the robot still separate);
+  keep the latch in the PLC (the right place in a real plant, but the simulated PLC has no logic); acknowledge
+  everything at once (would acknowledge a type the operator never saw on screen).
+- **Why:** one owner means one answer: every screen, the PLC and the robot show the same state, and the rule is
+  ~100 lines of plain Python with a test per transition. This revises D-31's "no cool-down for the robot": the
+  cool-down only stops re-latching the type a person has just checked; a new type still stops the robot.
+  Limits: state is in memory (an edge app restart forgets it); the open broker lets anyone acknowledge.

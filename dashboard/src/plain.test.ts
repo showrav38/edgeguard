@@ -116,7 +116,7 @@ describe("alarm groups", () => {
 describe("headline", () => {
   it("red only while the alarm is active; over but not acknowledged is amber", () => {
     const peak = reading({ state: "ALARM", failure_type: "power", ts: "2026-10-26T10:00:05Z" });
-    const base: LatchedAlarm = { startSeq: 1, startTs: "2026-10-26T10:00:05Z", peak, active: true, endTs: null, acknowledged: false };
+    const base: LatchedAlarm = { type: "power", startSeq: 1, startTs: "2026-10-26T10:00:05Z", peak, active: true, endTs: null, acknowledged: false };
     expect(headline(reading({ state: "ALARM" }), base, true).light).toBe("red");
     expect(headline(reading({ state: "ALARM" }), { ...base, acknowledged: true }, true).light).toBe("red");
     const over = headline(reading(), { ...base, active: false, endTs: "2026-10-26T10:00:09Z" }, true);
@@ -126,9 +126,10 @@ describe("headline", () => {
 
   it("a repeat during the cool-down (ALARM, no latch) is amber and counted", () => {
     const latest = reading({ state: "ALARM", failure_type: "power" });
-    const h = headline(latest, null, true, [event(3, 120, "power"), event(2, 60, "power"), event(1, 0, "power")], NOW + 150_000);
+    // The count is the edge app's group for this type (alarm_state), not this browser's history.
+    const h = headline(latest, null, true, { count: 3, since: "2026-10-26T10:00:00Z" }, NOW + 150_000);
     expect(h).toEqual({ light: "amber", word: "Attention", sentence: "Power problem: 3 alarms in the last 3 min" });
-    expect(headline(latest, null, true, [], NOW).sentence).toBe("Power problem again, already acknowledged.");
+    expect(headline(latest, null, true, null, NOW).sentence).toBe("Power problem again, already acknowledged.");
   });
 
   it("green / amber / red", () => {
@@ -136,7 +137,7 @@ describe("headline", () => {
     expect(headline(reading({ state: "WARNING", failure_type: "tool_wear" }), null, true).light).toBe("amber");
     expect(headline(reading({ drift_warning: true }), null, true).light).toBe("amber");
     const latched: LatchedAlarm = {
-      startSeq: 1, startTs: "", peak: reading({ state: "ALARM", failure_type: "tool_wear" }),
+      type: "tool_wear", startSeq: 1, startTs: "", peak: reading({ state: "ALARM", failure_type: "tool_wear" }),
       active: true, endTs: null, acknowledged: false,
     };
     const h = headline(reading(), latched, true);

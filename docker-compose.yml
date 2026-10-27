@@ -50,6 +50,7 @@ services:
       MODELS_DIR: /app/models
       BUFFER_PATH: /app/buffer/outbox.db
       DEMO_COMMANDS: ${DEMO_COMMANDS:-1}
+      ACK_COOLDOWN_S: ${ACK_COOLDOWN_S:-60}   # alarm state machine (edge_app/alarms.py)
     volumes:
       - ./models:/app/models:ro          # ONNX models + model_info.json, from `make train`
       - edge-buffer:/app/buffer          # store-and-forward outbox survives a container restart
@@ -86,7 +87,6 @@ services:
     build:
       context: .
       dockerfile: docker/dashboard.Dockerfile
-      args: { VITE_ACK_COOLDOWN_S: "${ACK_COOLDOWN_S:-60}" }
     image: edgeguard-dashboard
     ports:
       - "8080:80"

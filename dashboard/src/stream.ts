@@ -1,15 +1,14 @@
 // Pure logic for the telemetry stream: duplicate filter, chart history, alarm history.
 // No React and no MQTT here, so it is easy to unit-test (stream.test.ts).
-import type { Telemetry } from "./types";
+// The alarm state (latch, acknowledge, cool-down, counters) is NOT decided here: the edge app owns it and
+// publishes it on edgeguard/machine1/alarm_state (edge_app/alarms.py, D-32); this file only displays it.
+import type { AlarmState, Telemetry } from "./types";
 
 export const HISTORY_POINTS = 100; // points per live chart
 export const ALARM_EVENTS = 200; // rows in the alarm history (the counters below count every alarm)
 // Alarm rate window. ISA-18.2 calls more than 10 alarms in 10 min per operator an alarm flood.
 export const RATE_WINDOW_MS = 10 * 60_000;
 export const FLOOD_PER_WINDOW = 10;
-// After Acknowledge, the same failure type does not latch again for this long (VITE_ACK_COOLDOWN_S, default 60 s).
-// Its alarms are still recorded and counted; they only do not take over the screen again.
-export const ACK_COOLDOWN_MS = 1000 * Number(import.meta.env.VITE_ACK_COOLDOWN_S ?? 60);
 
 /**
  * Drops duplicate telemetry by seq.
@@ -63,20 +62,16 @@ export interface AlarmEvent {
   actualFailure: boolean;
   actualType: string;
   buffered: boolean;
-  suppressed: boolean; // arrived during the cool-down after an Acknowledge of the same type: did not latch
+  suppressed: boolean; // the edge app did not latch it: cool-down after an Acknowledge of the same type
 }
 
 /**
- * A latched alarm stays on screen until the operator acknowledges it, even if the readings go back
- * to OK (a short alarm must not disappear before anyone saw it).
- *   - starts with the first ALARM reading
- *   - active = the latest reading is still ALARM; endTs = when it left ALARM
- *   - Acknowledge while active -> acknowledged, removed when the readings leave ALARM
- *   - Acknowledge after it cleared -> removed at once
- *   - Acknowledge also starts a cool-down for the alarm's failure type: during it, a new alarm of that
- *     type does not latch again (alarm flood handling); a different type latches as usual
+ * The latched alarm shown on screen, taken from the edge app's alarm_state (one failure type; if several
+ * are latched, the one that most needs the operator: see shownLatch). It stays until acknowledged, even if
+ * the readings go back to OK. active = its condition is still there; endTs = when it left ALARM.
  */
 export interface LatchedAlarm {
+  type: string; // failure type: what Acknowledge sends
   startSeq: number;
   startTs: string;
   peak: Telemetry; // the reading with the highest risk: its action and factors are shown
@@ -89,58 +84,58 @@ export interface View {
   latest: Telemetry | null;
   points: Point[];
   alarms: AlarmEvent[]; // newest first
-  latched: LatchedAlarm | null;
+  alarmState: AlarmState | null; // latest edgeguard/machine1/alarm_state
+  latched: LatchedAlarm | null; // from alarmState
   liveAgeMs: number | null; // edge app -> browser, last non-buffered message
   missing: number; // readings never received: gaps in seq (should stay 0 through an outage)
   bufferedReceived: number; // readings delivered late from the edge app's buffer
-  cooldownUntil: Record<string, number>; // failure type -> end of its cool-down (ms, browser clock)
-  alarmTotal: number; // every alarm since the page opened, also those no longer in `alarms`
+  // From alarmState (the edge app counts every alarm since it started, also during a cool-down):
+  cooldownUntil: Record<string, number>; // failure type -> end of its cool-down (ms, edge app clock)
+  alarmTotal: number; // every alarm, also those no longer in `alarms`
   alarmFalse: number; // ... of which no real failure happened (replay ground truth)
-  recentAlarmMs: number[]; // alarm start times within RATE_WINDOW_MS of the latest reading
-  firstTs: number | null; // time of the first reading (the rate needs to know how long we have watched)
+  recentAlarms: number; // alarms within the last RATE_WINDOW_MS
+  watchedMs: number; // how long the edge app has counted (up to RATE_WINDOW_MS)
 }
 
 export const emptyView: View = {
-  latest: null, points: [], alarms: [], latched: null, liveAgeMs: null, missing: 0, bufferedReceived: 0,
-  cooldownUntil: {}, alarmTotal: 0, alarmFalse: 0, recentAlarmMs: [], firstTs: null,
+  latest: null, points: [], alarms: [], alarmState: null, latched: null, liveAgeMs: null, missing: 0,
+  bufferedReceived: 0, cooldownUntil: {}, alarmTotal: 0, alarmFalse: 0, recentAlarms: 0, watchedMs: 0,
 };
 
-/** True if a reading of this failure type falls into the cool-down after an Acknowledge. */
-export function inCooldown(view: Pick<View, "cooldownUntil">, failureType: string, tsMs: number): boolean {
-  const until = view.cooldownUntil[failureType];
-  return until != null && tsMs < until;
+/**
+ * Which latched failure type the screen shows (it has room for one): first one that needs an Acknowledge
+ * and is still active, then one that needs an Acknowledge (oldest first), then an acknowledged active one.
+ * After that one is acknowledged, the next one is shown, so no latched alarm is acknowledged unseen.
+ */
+export function shownLatch(s: AlarmState): LatchedAlarm | null {
+  const latched = Object.entries(s.types)
+    .filter(([, t]) => (t.state === "ACTIVE" || t.state === "WAITING_FOR_ACK") && t.peak && t.start_ts)
+    .map(([type, t]): LatchedAlarm => ({
+      type, startSeq: t.peak!.seq, startTs: t.start_ts!, peak: t.peak!, active: t.state === "ACTIVE",
+      endTs: t.end_ts, acknowledged: t.acknowledged,
+    }));
+  const rank = (l: LatchedAlarm) => (l.acknowledged ? 2 : l.active ? 0 : 1);
+  latched.sort((a, b) => rank(a) - rank(b) || Date.parse(a.startTs) - Date.parse(b.startTs));
+  return latched[0] ?? null;
 }
 
-function updateLatch(latched: LatchedAlarm | null, m: Telemetry, suppressed: boolean): LatchedAlarm | null {
-  if (m.state === "ALARM") {
-    if (!latched) {
-      if (suppressed) return null; // acknowledged a moment ago: recorded in the history, not latched again
-      return { startSeq: m.seq, startTs: m.ts, peak: m, active: true, endTs: null, acknowledged: false };
-    }
-    // Same latched alarm (it may have cleared and come back before anyone acknowledged it).
-    return { ...latched, active: true, endTs: null, peak: m.risk > latched.peak.risk ? m : latched.peak };
+/** Shows a new alarm_state from the edge app (the dashboard decides nothing about latching itself). */
+export function applyAlarmState(view: View, s: AlarmState): View {
+  const cooldownUntil: Record<string, number> = {};
+  for (const [type, t] of Object.entries(s.types)) {
+    if (t.state === "COOLDOWN" && t.cooldown_until) cooldownUntil[type] = Date.parse(t.cooldown_until);
   }
-  if (!latched || !latched.active) return latched;
-  // The condition just cleared: an acknowledged alarm goes away, an unacknowledged one stays.
-  return latched.acknowledged ? null : { ...latched, active: false, endTs: m.ts };
-}
-
-export function acknowledge(view: View, nowMs: number, cooldownMs = ACK_COOLDOWN_MS): View {
-  const l = view.latched;
-  if (!l) return view;
   return {
-    ...view,
-    latched: l.active ? { ...l, acknowledged: true } : null,
-    cooldownUntil: { ...view.cooldownUntil, [l.peak.failure_type]: nowMs + cooldownMs },
+    ...view, alarmState: s, latched: shownLatch(s), cooldownUntil,
+    alarmTotal: s.counters.total, alarmFalse: s.counters.false,
+    recentAlarms: s.counters.last_10min, watchedMs: s.counters.watched_s * 1000,
   };
 }
 
 /** Alarms per hour over the last RATE_WINDOW_MS (or over the time watched, if shorter). null under 1 min. */
 export function alarmRatePerHour(view: View): number | null {
-  if (!view.latest || view.firstTs == null) return null;
-  const watched = Math.min(RATE_WINDOW_MS, Date.parse(view.latest.ts) - view.firstTs);
-  if (watched < 60_000) return null;
-  return (view.recentAlarmMs.length / watched) * 3_600_000;
+  if (view.watchedMs < 60_000) return null;
+  return (view.recentAlarms / view.watchedMs) * 3_600_000;
 }
 
 /** "45 s", "3 min 12 s", "1 h 05 min" */
@@ -167,12 +162,8 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
   };
   const points = [...view.points, point].slice(-HISTORY_POINTS);
 
-  // A new alarm EVENT is the step into ALARM, not every reading while it stays in ALARM.
-  const tsMs = Date.parse(m.ts);
-  const suppressed = m.state === "ALARM" && !view.latched && inCooldown(view, m.failure_type, tsMs);
+  // A new alarm EVENT (history row) is the step into ALARM, not every reading while it stays in ALARM.
   let alarms = view.alarms;
-  let { alarmTotal, alarmFalse } = view;
-  let recentAlarmMs = view.recentAlarmMs.filter((t) => t > tsMs - RATE_WINDOW_MS);
   if (m.state === "ALARM" && view.latest?.state !== "ALARM") {
     const event: AlarmEvent = {
       seq: m.seq,
@@ -184,12 +175,9 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
       actualFailure: m.ground_truth.failure,
       actualType: m.ground_truth.type,
       buffered: m.buffered,
-      suppressed,
+      suppressed: !!m.alarm_suppressed, // decided by the edge app
     };
     alarms = [event, ...alarms].slice(0, ALARM_EVENTS);
-    alarmTotal += 1;
-    alarmFalse += m.ground_truth.failure ? 0 : 1;
-    recentAlarmMs = [...recentAlarmMs, tsMs];
   } else if (m.state !== "ALARM" && alarms[0] && alarms[0].endTs === null) {
     alarms = [{ ...alarms[0], endTs: m.ts }, ...alarms.slice(1)];
   }
@@ -200,10 +188,8 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
   const prevSeq = view.latest?.seq;
   const gap = prevSeq != null && m.seq > prevSeq + 1 ? m.seq - prevSeq - 1 : 0;
   return {
-    latest: m, points, alarms, latched: updateLatch(view.latched, m, suppressed), liveAgeMs,
+    ...view, latest: m, points, alarms, liveAgeMs,
     missing: view.missing + gap,
     bufferedReceived: view.bufferedReceived + (m.buffered ? 1 : 0),
-    cooldownUntil: view.cooldownUntil, alarmTotal, alarmFalse, recentAlarmMs,
-    firstTs: view.firstTs ?? tsMs,
   };
 }

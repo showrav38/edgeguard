@@ -30,6 +30,10 @@ EdgeGuard runs next to the machine and, for every PLC cycle:
 7. writes risk, alarm, type, action code and drift flag **back to the PLC**, publishes everything over
    **MQTT**, and shows a live **dashboard** with an Operator and an Engineer view.
 
+The edge app is the **single source of truth for alarm state**: latch, acknowledge, cool-down and grouping live in
+one state machine (`edge_app/alarms.py`, D-32), published retained on `edgeguard/machine1/alarm_state` and written
+to the PLC (`AlarmLatched`, `AlarmAcknowledged`), so every dashboard and the robot cell show the same.
+
 ## Architecture
 ```mermaid
 flowchart LR
@@ -52,11 +56,11 @@ flowchart LR
         U["React dashboard<br/>Operator / Engineer view"]
     end
     P -- "signals (OPC UA)" --> C
-    W -- "FailureRisk, Alarm, FailureType,<br/>ActionCode, DriftWarning (OPC UA)" --> P
+    W -- "FailureRisk, Alarm, FailureType, ActionCode,<br/>DriftWarning, AlarmLatched, AlarmAcknowledged (OPC UA)" --> P
     B -- "telemetry QoS 1, in order" --> Q
-    edge -- "status heartbeat (retained)" --> Q
+    edge -- "status heartbeat, alarm_state (retained)" --> Q
     Q -- "MQTT over websockets" --> U
-    U -- "demo commands<br/>edgeguard/machine1/cmd" --> Q
+    U -- "Acknowledge, demo commands<br/>edgeguard/machine1/cmd" --> Q
     Q -- "commands (validated)" --> edge
     M -.- F["models/ (mounted read-only)<br/>risk.onnx, failure_type.onnx,<br/>model_info.json"]
 ```
@@ -94,8 +98,8 @@ The ROS 2 words, in plain terms:
 
 ```mermaid
 flowchart LR
-    E["edge_app"] -- "MQTT telemetry<br/>(alarm per reading)" --> G
-    D["Dashboard<br/>Acknowledge button"] -- "MQTT edgeguard/machine1/ack" --> G
+    D["Dashboard<br/>Acknowledge button"] -- "MQTT edgeguard/machine1/cmd" --> E
+    E["edge_app<br/>alarm state machine"] -- "MQTT edgeguard/machine1/alarm_state<br/>(retained)" --> G
     subgraph ros["ros2 container (ROS 2 Jazzy)"]
         G["cell_guard node"] -- "/machine1/alarm<br/>std_msgs/Bool" --> Z["any subscriber<br/>e.g. ros2 topic echo"]
         G -- "/robot_cell/stop<br/>std_msgs/Bool (interlock)" --> R["robot_sim node"]
@@ -104,9 +108,11 @@ flowchart LR
     R -- "MQTT edgeguard/robot_cell/status<br/>running / stopped, parts" --> D
 ```
 
-- **cell_guard** is the bridge: it subscribes to the EdgeGuard telemetry and the acknowledge over MQTT and publishes
-  `/machine1/alarm` (the newest reading is an alarm) and `/robot_cell/stop` (the interlock) 5 times a second.
-  The rule itself is in `interlock.py`, plain Python with unit tests (`tests/test_interlock.py`).
+- **cell_guard** is the bridge: it subscribes to the edge app's `alarm_state` over MQTT and publishes
+  `/machine1/alarm` (an alarm is active now) and `/robot_cell/stop` (the interlock: latched and not acknowledged)
+  5 times a second. It decides nothing itself, so the robot respects the cool-down (a repeat of an acknowledged
+  failure type within 60 s does not stop it again; a different type does). The rule is in `interlock.py`, plain
+  Python with unit tests (`tests/test_interlock.py`).
 - **robot_sim** subscribes to `/robot_cell/stop`. State "running" (loads one part every 2 s) or "stopped by
   EdgeGuard". If the stop messages stop coming (cell_guard or ROS down), it stops too: no interlock signal, no motion.
   It reports its state over MQTT for the Engineer view's "Robot cell" card.
@@ -197,19 +203,21 @@ set `OPCUA_URL`, `MQTT_HOST`, `MODELS_DIR` (`/app/models`, mounted read-only) an
 | `BUFFER_MAX_ROWS` | `100000` | edge_app | buffer limit (~28 h at 1 reading/s); oldest dropped when full, count reported |
 | `MQTT_CLIENT_ID` | `edgeguard-edge` | edge_app | must be unique per broker |
 | `STATUS_INTERVAL_S` | `1.0` | edge_app | status heartbeat interval (PLC / edge / uplink health) |
-| `DEMO_COMMANDS` | `1` | edge_app | `0` = ignore the demo command topic `edgeguard/machine1/cmd` |
+| `DEMO_COMMANDS` | `1` | edge_app | `0` = ignore demo commands on `edgeguard/machine1/cmd` (Acknowledge still works) |
 | `ROBOT_PART_EVERY_S` | `2` | ros2 (robot_sim) | one part loaded every N seconds while running |
 | `VITE_MQTT_URL` | `ws://<page host>:9001` | dashboard | MQTT websocket URL (set at build time) |
-| `ACK_COOLDOWN_S` (`VITE_ACK_COOLDOWN_S`) | `60` | dashboard | after Acknowledge, repeats of the same failure type are listed and counted but do not raise the alarm again for this long (build time) |
+| `ACK_COOLDOWN_S` | `60` | edge_app | after Acknowledge, repeats of the same failure type are listed and counted but do not latch the alarm (or stop the robot) again for this long |
 
 ## Honest limits
 - **Too many alarms (alarm flood).** The cost-based threshold (0.16; a missed failure = 20 × a false alarm) fires
   early by design. On the 2000-row replay at 1x that is 161 ALARM readings, about **one every 12 s**, and **80 %
   of them false** (104 alarm events = 187 per hour, 87 % false). ISA-18.2 / EEMUA 191 call more than 10 alarms in
-  10 min per operator an alarm flood and aim for about 6 per hour. The dashboard limits the damage: after
-  Acknowledge, the same failure type does not latch again for 60 s, repeats are grouped ("Power problem: N alarms
-  in the last X min"), every alarm stays in the history and counters, and the Engineer view shows the alarm rate.
-  That treats the symptom. The real fix is a better model: model v2 in M7 with power, temperature difference and
+  10 min per operator an alarm flood and aim for about 6 per hour. The edge app's alarm state machine limits the
+  damage: after Acknowledge, the same failure type does not latch again for 60 s, repeats are grouped ("Power
+  problem: N alarms in the last X min"), every alarm stays in the history and counters, and the Engineer view shows
+  the alarm rate. Robot stops on the replay (`scripts/robot_stops.py`, operator acknowledges after 10 s): 18.3 per
+  10 min before the cool-down applied to the robot, 12.3 after (30 s: 11.7 → 8.1); the rest are alarms of other
+  failure types, which the cool-down must not hide. That treats the symptom. The real fix is a better model: model v2 in M7 with power, temperature difference and
   tool wear × torque as features, which match how the failures are defined (see Next steps).
 - **Semi-synthetic data.** AI4I 2020 labels were generated by simple published rules, not recorded on a real
   machine. On this data the rules alone (HDF/PWF/OSF) reach precision 1.00 (recall 0.72 vs the model's 0.85), so
@@ -226,11 +234,13 @@ set `OPCUA_URL`, `MQTT_HOST`, `MODELS_DIR` (`/app/models`, mounted read-only) an
   the model has no power feature, so a power failure is explained by torque and temperature (D-11).
 - **Drift detection** looks at window means per signal only; a shift smaller than ~2.35 std is not flagged.
 - **Simulated outage in the demo.** `make demo` cuts the uplink inside the edge app (same buffering code path);
-  the real broker stop is tested in `make check-m4`. Alarm acknowledgement lives in one browser tab; it is also
-  published over MQTT so the robot interlock can be released, but another tab does not see it.
+  the real broker stop is tested in `make check-m4`.
+- **Alarm state lives in the edge app's memory.** A restart of the edge app forgets latched alarms and cool-downs
+  (it starts NORMAL); a real system would keep them in the PLC or on disk. The broker is open, so anyone on the
+  network can send an Acknowledge.
 - **The robot interlock is not a safety function.** It runs over MQTT and ROS 2 without safety-rated hardware or
   protocols (a real cell would use a safety PLC and e.g. PROFIsafe); it shows the logic, not certified protection.
-  It applies no cool-down (D-31), so with v1's alarm flood the robot stops about every 12 s at 1x replay.
+  Since D-32 it follows the edge app's cool-down; with v1's alarm flood it still stops about 12 times per 10 min.
 
 ## What I learned (ME)
 _TODO (ME): write in my own words._
@@ -246,7 +256,6 @@ _TODO (ME): write in my own words._
   D-28): v2 should separate the many near-limit false alarms (e.g. 8.6 kW) from real failures; measure the alarm
   rate and false share on the replay before and after the swap.
 - **Security:** OPC UA with certificates (Basic256Sha256), MQTT with TLS, users and ACLs.
-- **Alarm state in the edge app / PLC** instead of the browser, so acknowledgement is shared across screens.
 - **Real machine data**, and retraining when drift persists.
 
 ## Data

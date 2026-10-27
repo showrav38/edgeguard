@@ -12,7 +12,10 @@ Next to the loop (M5):
   - a status "heartbeat" every second on edgeguard/machine1/status (retained): PLC, edge and uplink
     health + buffer counts. It is published directly, NOT through the outbox, so the dashboard sees
     the backlog grow during a (simulated) outage. Telemetry still goes only through the outbox.
-  - demo commands from the dashboard on edgeguard/machine1/cmd (see commands.py).
+  - commands from the dashboard on edgeguard/machine1/cmd (see commands.py): demo commands and Acknowledge.
+  - the alarm state machine (alarms.py, D-32): the one place that decides latch, acknowledge and
+    cool-down. Its state is published retained on edgeguard/machine1/alarm_state whenever it changes
+    and written to the PLC (AlarmLatched, AlarmAcknowledged); dashboards and cell_guard only follow it.
 
 Run: python -m edge_app.main      Config via environment variables.
 """
@@ -27,6 +30,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 from edge_app import actions, commands, explain
+from edge_app.alarms import AlarmManager
 from edge_app.buffer import Outbox, StoreAndForward
 from edge_app.drift import DriftMonitor, thresholds
 from edge_app.inference import Models
@@ -39,15 +43,17 @@ MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "edgeguard-edge")
 TOPIC_TELEMETRY = os.getenv("MQTT_TOPIC_TELEMETRY", "edgeguard/machine1/telemetry")
 TOPIC_STATUS = os.getenv("MQTT_TOPIC_STATUS", "edgeguard/machine1/status")
 TOPIC_CMD = os.getenv("MQTT_TOPIC_CMD", "edgeguard/machine1/cmd")
-DEMO_COMMANDS = os.getenv("DEMO_COMMANDS", "1") == "1"  # 0 = ignore the command topic
+TOPIC_ALARM_STATE = os.getenv("MQTT_TOPIC_ALARM_STATE", "edgeguard/machine1/alarm_state")
+DEMO_COMMANDS = os.getenv("DEMO_COMMANDS", "1") == "1"  # 0 = ignore demo commands (Acknowledge still works)
 STATUS_INTERVAL_S = float(os.getenv("STATUS_INTERVAL_S", "1.0"))
 
 log = logging.getLogger("edge")
 
 
-def make_mqtt(models: Models, on_command) -> mqtt.Client:
+def make_mqtt(models: Models, on_command, on_connected) -> mqtt.Client:
     """paho-mqtt client running its network loop in a background thread.
-    on_command(payload: bytes) is called (in paho's thread) for every message on the command topic."""
+    on_command(payload: bytes) is called (in paho's thread) for every message on the command topic,
+    on_connected() after every (re)connect."""
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
     status = {"model_version": models.version, "threshold": models.threshold,
               "cost_ratio": models.info["cost_ratio"]}
@@ -57,8 +63,8 @@ def make_mqtt(models: Models, on_command) -> mqtt.Client:
     def on_connect(c, userdata, flags, reason_code, properties):
         log.info("MQTT connected to %s:%d (%s)", MQTT_HOST, MQTT_PORT, reason_code)
         c.publish(TOPIC_STATUS, json.dumps({"state": "running", **status}), qos=1, retain=True)
-        if DEMO_COMMANDS:
-            c.subscribe(TOPIC_CMD, qos=1)  # (re)subscribe on every connect: clean session
+        c.subscribe(TOPIC_CMD, qos=1)  # (re)subscribe on every connect: clean session
+        on_connected()
 
     client.on_connect = on_connect
     client.on_message = lambda c, userdata, m: on_command(m.payload)
@@ -101,8 +107,11 @@ class Edge:
         log.info("models loaded: version %s, threshold %.2f", self.models.version, self.models.threshold)
         self.commands: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        # paho calls on_command in its own thread; hand the payload over to the asyncio loop safely.
-        self.mqtt = make_mqtt(self.models, lambda p: loop.call_soon_threadsafe(self.commands.put_nowait, p))
+        self.alarms = AlarmManager(time.time())
+        self.alarm_state_sent = None  # last alarm_state published (JSON), to publish only on change
+        # paho calls back in its own thread; hand over to the asyncio loop safely.
+        self.mqtt = make_mqtt(self.models, lambda p: loop.call_soon_threadsafe(self.commands.put_nowait, p),
+                              lambda: loop.call_soon_threadsafe(self.resend_alarm_state))
         self.outbox = Outbox()
         self.sender = StoreAndForward(self.mqtt, self.outbox)
         self.drift_monitor = DriftMonitor(self.models.info["training_stats"], *thresholds(self.models.info))
@@ -116,8 +125,7 @@ class Edge:
         await self.plc.connect()
         queue = await self.plc.subscribe_seq()
         asyncio.create_task(self.status_loop())
-        if DEMO_COMMANDS:
-            asyncio.create_task(self.command_loop())
+        asyncio.create_task(self.command_loop())
 
         n = 0
         inf_ms: list[float] = []
@@ -137,6 +145,12 @@ class Edge:
             decision = actions.decide(pred, signals, self.models.threshold)
             drift = self.drift_monitor.update(signals)
             inference_ms = (time.perf_counter() - t0) * 1000
+            msg = telemetry(seq, signals, pred, decision, factors, drift, inference_ms, 0.0,
+                            ground_truth, self.missed)
+            # The alarm state machine runs on the reading's own time, so an Acknowledge carrying that ts matches it.
+            reading_t = datetime.fromisoformat(msg["ts"]).timestamp()
+            msg["alarm_suppressed"] = self.alarms.on_reading(msg, reading_t)  # in a cool-down: not latched
+            alarm_state = self.alarms.snapshot(reading_t)
 
             t_write = time.perf_counter()
             await self.plc.write_outputs({
@@ -145,14 +159,16 @@ class Edge:
                 "FailureType": decision["failure_type"],
                 "ActionCode": decision["code"],
                 "DriftWarning": drift["warning"],
+                "AlarmLatched": alarm_state["latched"],
+                "AlarmAcknowledged": alarm_state["acknowledged"],
                 "InferenceMs": inference_ms,
                 "ModelVersion": self.models.version,
                 "LastSeqProcessed": seq,
             })
             plc_io_ms = read_ms + (time.perf_counter() - t_write) * 1000
-            msg = telemetry(seq, signals, pred, decision, factors, drift, inference_ms, plc_io_ms,
-                            ground_truth, self.missed)
+            msg["plc_io_ms"] = round(plc_io_ms, 3)
             self.sender.send(TOPIC_TELEMETRY, msg)  # stored in SQLite first, sent in order by a thread
+            self.publish_alarm_state(self.alarms.snapshot(reading_t))  # after send: the peak reading is complete
 
             self.last_seq, self.last_row_at = seq, time.monotonic()
             self.inference_ms, self.plc_io_ms = inference_ms, plc_io_ms
@@ -197,14 +213,43 @@ class Edge:
     async def status_loop(self):
         while True:
             await self.publish_status()
+            self.publish_alarm_state(self.alarms.snapshot(time.time()))  # a cool-down may have ended
             await asyncio.sleep(STATUS_INTERVAL_S)
+
+    def publish_alarm_state(self, state: dict):
+        """Retained, QoS 1, only when it changed. Sent directly (not through the outbox): it is the CURRENT
+        state, an old one is useless. A new dashboard (or cell_guard) gets the retained one at once."""
+        payload = json.dumps(state)
+        if payload != self.alarm_state_sent:
+            self.alarm_state_sent = payload
+            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            self.mqtt.publish(TOPIC_ALARM_STATE, json.dumps({"ts": ts, **state}), qos=1, retain=True)
+
+    def resend_alarm_state(self):
+        """After a (re)connect: publish again even if unchanged (the broker may have lost it)."""
+        self.alarm_state_sent = None
+        self.publish_alarm_state(self.alarms.snapshot(time.time()))
+
+    async def acknowledge(self, cmd: dict) -> list[str]:
+        done = self.alarms.acknowledge(time.time(), cmd["type"], cmd["seen_ts"])
+        if done:
+            state = self.alarms.snapshot(time.time())
+            self.publish_alarm_state(state)
+            await self.plc.write_alarm_state(state["latched"], state["acknowledged"])
+        return done
 
     async def command_loop(self):
         while True:
             payload = await self.commands.get()
             try:
                 cmd = commands.parse(payload)
-                if cmd["cmd"] == "drift":
+                if cmd["cmd"] == "ack":
+                    done = await self.acknowledge(cmd)
+                    log.info("acknowledge %s -> %s", cmd, done or "nothing to acknowledge (ignored)")
+                    cmd = {"cmd": "ack", "acknowledged": done}
+                elif not DEMO_COMMANDS:
+                    raise ValueError("demo commands are off (DEMO_COMMANDS=0)")
+                elif cmd["cmd"] == "drift":
                     await self.plc.write_demo(drift=cmd["on"])
                 elif cmd["cmd"] == "speed":
                     await self.plc.write_demo(cycle_ms=cmd["cycle_ms"])

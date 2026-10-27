@@ -1,7 +1,7 @@
 // Plain-language text for the Operator view: what a technician or a visitor reads in 5 seconds.
 // Pure functions (no React), unit-tested in plain.test.ts.
 import type { AlarmEvent, LatchedAlarm } from "./stream";
-import type { Telemetry } from "./types";
+import type { AlarmTypeInfo, Telemetry } from "./types";
 
 export type Light = "green" | "amber" | "red" | "off";
 
@@ -135,10 +135,10 @@ const capital = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
  * Traffic light + sentence. A latched alarm wins over the latest reading (it stays until acknowledged).
  * Red only while the risk is above the threshold (an active alarm); an alarm that is over but not yet
  * acknowledged, or a repeat during the cool-down after Acknowledge, is amber.
- * `alarms` (newest first) and `nowMs` are only needed for the repeat sentence.
+ * `group` (the edge app's count for the latest reading's type) and `nowMs` are only needed for the repeat sentence.
  */
 export function headline(latest: Telemetry | null, latched: LatchedAlarm | null, live: boolean,
-                         alarms: AlarmEvent[] = [], nowMs = Date.now()): Headline {
+                         group: AlarmTypeInfo["group"] | null = null, nowMs = Date.now()): Headline {
   if (!live) return { light: "off", word: "No data", sentence: "No live data from Machine 1 right now." };
   if (!latest) return { light: "off", word: "Waiting", sentence: "Waiting for the first reading from Machine 1…" };
   if (latched) {
@@ -153,11 +153,11 @@ export function headline(latest: Telemetry | null, latched: LatchedAlarm | null,
   }
   if (latest.state === "ALARM") {
     // ALARM without a latch = a repeat of a type acknowledged a moment ago (cool-down).
-    const g = groupAlarms(alarms)[0];
     const what = PLAIN_FAILURE[latest.failure_type] ?? latest.failure_type;
     return { light: "amber", word: "Attention",
-             sentence: g && g.failureType === latest.failure_type && g.events.length > 1
-               ? groupHeadline(g, nowMs) : `${capital(what)} again, already acknowledged.` };
+             sentence: group && group.since && group.count > 1
+               ? countHeadline(latest.failure_type, group.count, Date.parse(group.since), nowMs)
+               : `${capital(what)} again, already acknowledged.` };
   }
   if (latest.state === "WARNING") {
     return { light: "amber", word: "Attention soon",
@@ -205,10 +205,13 @@ export function groupAlarms(alarms: AlarmEvent[], gapMs = GROUP_GAP_MS): AlarmGr
 }
 
 /** "Power problem: 4 alarms in the last 3 min" (minutes rounded up, at least 1). */
+export function countHeadline(failureType: string, count: number, oldestMs: number, nowMs: number): string {
+  const min = Math.max(1, Math.ceil((nowMs - oldestMs) / 60_000));
+  return `${capital(PLAIN_FAILURE[failureType] ?? failureType)}: ${count} alarms in the last ${min} min`;
+}
+
 export function groupHeadline(g: AlarmGroup, nowMs: number): string {
-  const oldest = Date.parse(g.events[g.events.length - 1].ts);
-  const min = Math.max(1, Math.ceil((nowMs - oldest) / 60_000));
-  return `${capital(PLAIN_FAILURE[g.failureType] ?? g.failureType)}: ${g.events.length} alarms in the last ${min} min`;
+  return countHeadline(g.failureType, g.events.length, Date.parse(g.events[g.events.length - 1].ts), nowMs);
 }
 
 /** One history line for a group: a single alarm keeps its sentence, a repeat is counted. */

@@ -22,6 +22,8 @@ OUTPUT_TYPES = {
     "FailureType": ua.VariantType.String,
     "ActionCode": ua.VariantType.Int16,
     "DriftWarning": ua.VariantType.Boolean,
+    "AlarmLatched": ua.VariantType.Boolean,       # latched alarm (alarms.py); the robot stops while
+    "AlarmAcknowledged": ua.VariantType.Boolean,  # AlarmLatched and not AlarmAcknowledged
     "InferenceMs": ua.VariantType.Double,
     "ModelVersion": ua.VariantType.String,
     "LastSeqProcessed": ua.VariantType.Int32,  # last on purpose: "this row is fully handled"
@@ -59,6 +61,7 @@ class PlcClient:
         self.read_nodes = [self.seq_node] + [node(n) for n in SIGNALS + EXTRA]
         self.out_nodes = [node(n) for n in OUTPUT_TYPES]
         self.drift_node, self.cycle_node = node("DriftMode"), node("CycleMs")
+        self.alarm_nodes = [node("AlarmLatched"), node("AlarmAcknowledged")]
         log.info("connected to PLC %s (namespace index %d)", self.url, ns)
 
     async def subscribe_seq(self) -> asyncio.Queue:
@@ -79,6 +82,11 @@ class PlcClient:
         """Write all edge outputs in ONE write request (order: LastSeqProcessed last)."""
         variants = [ua.Variant(outputs[n], vt) for n, vt in OUTPUT_TYPES.items()]
         await self.client.write_values(self.out_nodes, variants)
+
+    async def write_alarm_state(self, latched: bool, acknowledged: bool):
+        """After an Acknowledge (between readings): update the two alarm-state outputs at once."""
+        await self.client.write_values(self.alarm_nodes, [ua.Variant(latched, ua.VariantType.Boolean),
+                                                          ua.Variant(acknowledged, ua.VariantType.Boolean)])
 
     async def read_demo(self) -> dict:
         """Demo settings of the simulated PLC: drift mode and replay cycle time."""

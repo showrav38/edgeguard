@@ -11,7 +11,7 @@ const FLOOD_PER_HOUR = FLOOD_PER_WINDOW * (3_600_000 / RATE_WINDOW_MS); // 10 in
 export function AlarmHistory({ view }: { view: View }) {
   const { alarms, alarmTotal, alarmFalse } = view;
   const rate = alarmRatePerHour(view);
-  const flood = view.recentAlarmMs.length > FLOOD_PER_WINDOW;
+  const flood = view.recentAlarms > FLOOD_PER_WINDOW;
   const tone: Tone = rate == null ? "idle" : flood ? "warn" : "ok";
   const rateText = rate == null ? "Alarm rate: collecting (needs 1 min)"
     : `${Math.round(rate)} alarms per hour${flood ? ": alarm flood" : ""}`;

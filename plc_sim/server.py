@@ -3,8 +3,8 @@
 Namespace "urn:edgeguard:plc", object "Machine1".
   PLC writes : AirTempK, ProcessTempK, SpeedRpm, TorqueNm, ToolWearMin, ProductType, Seq,
                GroundTruthFailure, GroundTruthType, DriftMode (writable by clients, for the demo)
-  Edge writes: FailureRisk, Alarm, FailureType, ActionCode, DriftWarning, InferenceMs,
-               LastSeqProcessed, ModelVersion
+  Edge writes: FailureRisk, Alarm, FailureType, ActionCode, DriftWarning, AlarmLatched,
+               AlarmAcknowledged, InferenceMs, LastSeqProcessed, ModelVersion
 
 One row per cycle. All signals are written first and Seq LAST, so a client that sees a new Seq
 can read one consistent row. Seq keeps counting when the replay wraps around.
@@ -60,6 +60,8 @@ EDGE_OUTPUTS = {
     "FailureType": (ua.VariantType.String, ""),
     "ActionCode": (ua.VariantType.Int16, 0),
     "DriftWarning": (ua.VariantType.Boolean, False),
+    "AlarmLatched": (ua.VariantType.Boolean, False),       # alarm state machine (edge_app/alarms.py)
+    "AlarmAcknowledged": (ua.VariantType.Boolean, False),
     "InferenceMs": (ua.VariantType.Double, 0.0),
     "LastSeqProcessed": (ua.VariantType.Int32, 0),
     "ModelVersion": (ua.VariantType.String, ""),

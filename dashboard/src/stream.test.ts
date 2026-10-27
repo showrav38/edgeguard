@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  acknowledge, addTelemetry, alarmRatePerHour, emptyView, formatDuration, HISTORY_POINTS, SeqDeduper, type View,
+  addTelemetry, alarmRatePerHour, applyAlarmState, emptyView, formatDuration, HISTORY_POINTS, SeqDeduper,
 } from "./stream";
-import type { Telemetry } from "./types";
+import type { AlarmState, AlarmTypeInfo, Telemetry } from "./types";
 
 function msg(seq: number, state: Telemetry["state"] = "OK", ts = `2026-10-26T10:00:00.${seq}Z`): Telemetry {
   return {
@@ -90,39 +90,7 @@ describe("delivery counters", () => {
   });
 });
 
-describe("alarm latch", () => {
-  const feed = (v: View, states: Telemetry["state"][], start: number) =>
-    states.reduce((acc, st, i) => addTelemetry(acc, msg(start + i, st), 0), v);
-
-  it("stays latched after the readings go back to OK, until acknowledged", () => {
-    let v = feed(emptyView, ["OK", "ALARM", "ALARM", "OK", "OK"], 1);
-    expect(v.latched).toMatchObject({ startSeq: 2, active: false, endTs: msg(4).ts, acknowledged: false });
-    v = acknowledge(v, 0);
-    expect(v.latched).toBeNull();
-  });
-
-  it("acknowledged while active: stays until the readings leave ALARM", () => {
-    let v = feed(emptyView, ["ALARM", "ALARM"], 1);
-    v = acknowledge(v, 0);
-    expect(v.latched).toMatchObject({ active: true, acknowledged: true });
-    v = feed(v, ["ALARM"], 3);
-    expect(v.latched?.acknowledged).toBe(true);
-    v = feed(v, ["OK"], 4);
-    expect(v.latched).toBeNull();
-  });
-
-  it("an alarm that returns before acknowledgement is the same latched alarm", () => {
-    let v = feed(emptyView, ["ALARM", "OK", "ALARM"], 1);
-    expect(v.latched).toMatchObject({ startSeq: 1, active: true, endTs: null });
-  });
-
-  it("keeps the highest-risk reading for the action", () => {
-    let v = addTelemetry(emptyView, { ...msg(1, "ALARM"), risk: 0.5 }, 0);
-    v = addTelemetry(v, { ...msg(2, "ALARM"), risk: 0.9 }, 0);
-    v = addTelemetry(v, { ...msg(3, "ALARM"), risk: 0.6 }, 0);
-    expect(v.latched?.peak.seq).toBe(2);
-  });
-
+describe("formatDuration", () => {
   it("formats durations", () => {
     expect(formatDuration(45_000)).toBe("45 s");
     expect(formatDuration(192_000)).toBe("3 min 12 s");
@@ -130,66 +98,72 @@ describe("alarm latch", () => {
   });
 });
 
-// Readings at whole seconds after T0, with a chosen failure type (the cool-down is per type).
+// ---------- alarm_state from the edge app (edge_app/alarms.py owns latch, acknowledge, cool-down) ----------
 const T0 = Date.parse("2026-10-26T10:00:00Z");
-function at(sec: number, state: Telemetry["state"], type = "power", truth = false): Telemetry {
-  return { ...msg(sec, state, new Date(T0 + sec * 1000).toISOString()), failure_type: state === "OK" ? "none" : type,
-           ground_truth: { failure: truth, type: truth ? "PWF" : "none" } };
+const iso = (sec: number) => new Date(T0 + sec * 1000).toISOString();
+const NORMAL: AlarmTypeInfo = { state: "NORMAL", acknowledged: false, start_ts: null, end_ts: null, peak: null,
+                                cooldown_until: null, group: { count: 0, since: null } };
+function alarmState(types: Record<string, Partial<AlarmTypeInfo>>, counters = { total: 1, false: 1, last_10min: 1, watched_s: 120 }): AlarmState {
+  const all = Object.fromEntries(["tool_wear", "heat_dissipation", "power", "overstrain"]
+    .map((t) => [t, { ...NORMAL, ...types[t] }]));
+  const vals = Object.values(all);
+  const latched = vals.some((t) => t.state === "ACTIVE" || t.state === "WAITING_FOR_ACK");
+  const needsAck = vals.some((t) => t.state === "WAITING_FOR_ACK" || (t.state === "ACTIVE" && !t.acknowledged));
+  return { ts: iso(0), latched, acknowledged: latched && !needsAck, active: vals.some((t) => t.state === "ACTIVE"),
+           types: all, counters, cooldown_s: 60 };
 }
-const run = (v: View, ...ms: Telemetry[]) => ms.reduce((acc, m) => addTelemetry(acc, m, 0), v);
+const peak = (seq: number, type: string) => ({ ...msg(seq, "ALARM"), failure_type: type });
 
-describe("alarm flood: cool-down after Acknowledge", () => {
-  const COOLDOWN = 60_000;
-
-  it("a repeat of the same type within the cool-down does not latch, but is recorded", () => {
-    let v = run(emptyView, at(1, "ALARM"), at(2, "OK"));
-    v = acknowledge(v, T0 + 3000, COOLDOWN); // cool-down until T0 + 63 s
-    expect(v.latched).toBeNull();
-    v = run(v, at(10, "ALARM"), at(11, "OK"), at(30, "ALARM"));
-    expect(v.latched).toBeNull();
-    expect(v.alarms.map((a) => [a.seq, a.suppressed])).toEqual([[30, true], [10, true], [1, false]]);
-    expect(v.alarmTotal).toBe(3);
-  });
-
-  it("latches again after the cool-down", () => {
-    let v = run(emptyView, at(1, "ALARM"), at(2, "OK"));
-    v = acknowledge(v, T0 + 3000, COOLDOWN);
-    v = run(v, at(64, "ALARM"));
-    expect(v.latched).toMatchObject({ startSeq: 64, active: true, acknowledged: false });
-    expect(v.alarms[0].suppressed).toBe(false);
-  });
-
-  it("a different failure type latches during the cool-down", () => {
-    let v = run(emptyView, at(1, "ALARM", "power"), at(2, "OK"));
-    v = acknowledge(v, T0 + 3000, COOLDOWN);
-    v = run(v, at(10, "ALARM", "tool_wear"));
-    expect(v.latched?.peak.failure_type).toBe("tool_wear");
-  });
-
-  it("acknowledged while active: the cool-down starts at the acknowledge", () => {
-    let v = run(emptyView, at(1, "ALARM"));
-    v = acknowledge(v, T0 + 2000, COOLDOWN);
-    v = run(v, at(3, "OK"), at(20, "ALARM"));
-    expect(v.latched).toBeNull();
-    expect(v.cooldownUntil.power).toBe(T0 + 62_000);
-  });
-});
-
-describe("alarm counters and rate", () => {
-  it("counts every alarm and the false ones, also beyond the history length", () => {
+describe("alarm state is only displayed", () => {
+  it("telemetry alone never latches (the edge app decides)", () => {
     let v = emptyView;
-    for (let i = 0; i < 300; i++) v = run(v, at(2 * i, "ALARM", "power", i % 4 === 0), at(2 * i + 1, "OK"));
-    expect(v.alarms).toHaveLength(200);
-    expect(v.alarmTotal).toBe(300);
-    expect(v.alarmFalse).toBe(225);
+    for (const [seq, st] of [[1, "ALARM"], [2, "OK"]] as const) v = addTelemetry(v, msg(seq, st), 0);
+    expect(v.latched).toBeNull();
+    expect(v.alarms).toHaveLength(1); // the history row is still recorded
   });
 
-  it("alarms per hour over the last 10 min, null before 1 min of data", () => {
-    let v = run(emptyView, at(0, "OK"), at(10, "ALARM"), at(11, "OK"));
-    expect(alarmRatePerHour(v)).toBeNull();
-    // 1 alarm per 12 s for 20 min: the window keeps the last 10 min = 50 alarms -> 300 per hour.
-    for (let sec = 12; sec <= 1200; sec += 12) v = run(v, at(sec, "ALARM"), at(sec + 1, "OK"));
-    expect(v.recentAlarmMs).toHaveLength(50);
+  it("shows a latched alarm that is over but waits for an acknowledge", () => {
+    const v = applyAlarmState(emptyView, alarmState({
+      power: { state: "WAITING_FOR_ACK", start_ts: iso(1), end_ts: iso(4), peak: peak(2, "power") } }));
+    expect(v.latched).toMatchObject({ type: "power", startTs: iso(1), active: false, endTs: iso(4), acknowledged: false });
+  });
+
+  it("shows the alarm that most needs the operator when several types are latched", () => {
+    const v = applyAlarmState(emptyView, alarmState({
+      power: { state: "ACTIVE", acknowledged: true, start_ts: iso(1), peak: peak(1, "power") },
+      tool_wear: { state: "WAITING_FOR_ACK", start_ts: iso(5), end_ts: iso(6), peak: peak(5, "tool_wear") },
+      overstrain: { state: "ACTIVE", start_ts: iso(8), peak: peak(8, "overstrain") },
+    }));
+    expect(v.latched?.type).toBe("overstrain"); // needs an acknowledge and is active
+  });
+
+  it("cool-down, counters and the alarm rate come from the edge app", () => {
+    let v = addTelemetry(emptyView, { ...msg(1, "ALARM"), alarm_suppressed: true }, 0);
+    v = applyAlarmState(v, alarmState({ tool_wear: { state: "COOLDOWN", acknowledged: true, cooldown_until: iso(63) } },
+                                      { total: 300, false: 225, last_10min: 50, watched_s: 600 }));
+    expect(v.latched).toBeNull();
+    expect(v.cooldownUntil).toEqual({ tool_wear: T0 + 63_000 });
+    expect(v.alarms[0].suppressed).toBe(true);
+    expect([v.alarmTotal, v.alarmFalse]).toEqual([300, 225]);
     expect(alarmRatePerHour(v)).toBeCloseTo(300, 0);
+    expect(alarmRatePerHour(applyAlarmState(v, alarmState({}, { total: 1, false: 1, last_10min: 1, watched_s: 30 })))).toBeNull();
+  });
+
+  it("two dashboards see the same state; an acknowledge from one clears both", () => {
+    // Two browsers opened at different times: different telemetry history, same retained alarm_state.
+    let a = addTelemetry(emptyView, msg(1, "OK"), 0);
+    let b = emptyView;
+    const waiting = alarmState({ power: { state: "WAITING_FOR_ACK", start_ts: iso(1), end_ts: iso(2), peak: peak(1, "power") } });
+    a = applyAlarmState(a, waiting);
+    b = applyAlarmState(b, waiting);
+    expect(a.latched).toEqual(b.latched);
+    expect(a.latched?.acknowledged).toBe(false);
+    // Dashboard A sends {"cmd":"ack"}; the edge app publishes the new state to everyone.
+    const acked = alarmState({ power: { state: "COOLDOWN", acknowledged: true, cooldown_until: iso(63) } });
+    a = applyAlarmState(a, acked);
+    b = applyAlarmState(b, acked);
+    expect(a.latched).toBeNull();
+    expect(b.latched).toBeNull();
+    expect(a.cooldownUntil).toEqual(b.cooldownUntil);
   });
 });

@@ -4,7 +4,8 @@
 // disappears, moves or changes size by more than 2 px. Opening the guided demo must not move anything either,
 // and its panel must not cover a chart. Engineer view on a phone: no text cut off, no sideways scrolling.
 //
-// The data comes from a private broker (started by e2e/run.sh); this test publishes the same messages the edge app would.
+// The data comes from a private broker (started by e2e/run.sh); this test publishes the same messages the edge app would,
+// including alarm_state (the edge app owns latch, acknowledge and cool-down) and its answer to the Acknowledge command.
 import { expect, test, type Page } from "@playwright/test";
 import mqtt from "mqtt";
 
@@ -27,6 +28,18 @@ let robot = { state: "running", reason: "running", parts: 12 };
 const robotStatus = () => ({ ...robot, ts: new Date().toISOString() });
 const ROBOT_STOPPED = { state: "stopped", reason: "stopped by EdgeGuard", parts: 1234 };
 const ROBOT_RUNNING = { state: "running", reason: "running", parts: 1234 };
+
+// edgeguard/machine1/alarm_state, shaped like edge_app/alarms.py. Only tool_wear changes in this scenario.
+const NORMAL_TYPE = { state: "NORMAL", acknowledged: false, start_ts: null as string | null, end_ts: null as string | null,
+                      peak: null as object | null, cooldown_until: null as string | null, group: { count: 0, since: null as string | null } };
+let toolWear = { ...NORMAL_TYPE };
+let counters = { total: 0, false: 0, last_10min: 0, watched_s: 0 };
+const alarmState = () => {
+  const latched = toolWear.state === "ACTIVE" || toolWear.state === "WAITING_FOR_ACK";
+  return { ts: new Date().toISOString(), latched, acknowledged: latched && toolWear.acknowledged, active: toolWear.state === "ACTIVE",
+           types: { tool_wear: toolWear, heat_dissipation: NORMAL_TYPE, power: NORMAL_TYPE, overstrain: NORMAL_TYPE },
+           counters, cooldown_s: 60 };
+};
 
 let seq = 0;
 function reading(o: { risk?: number; state?: string; type?: string; code?: number; text?: string; wear?: number;
@@ -121,7 +134,25 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
       seq = 0;
       uplink = { ...uplink, state: "up", buffer_backlog: 0, outage_remaining_s: 0 };
       robot = { state: "running", reason: "running", parts: 12 };
+      toolWear = { ...NORMAL_TYPE };
+      counters = { total: 0, false: 0, last_10min: 0, watched_s: 0 };
       const client = await mqtt.connectAsync("ws://localhost:19001", { clientId: `layout-${mode}-${viewport.name}` });
+      // Like the edge app: publish the alarm state (retained) at once when it changes.
+      const setAlarm = async (patch: Partial<typeof toolWear>, total?: number) => {
+        toolWear = { ...toolWear, ...patch };
+        if (total != null) counters = { ...counters, total, last_10min: total, watched_s: 120 };
+        await client.publishAsync(`${T}/alarm_state`, JSON.stringify(alarmState()), { qos: 1, retain: true });
+      };
+      // Like the edge app: answer the dashboard's Acknowledge (the only command this test expects).
+      const acks: { cmd: string; type: string | null }[] = [];
+      await client.subscribeAsync(`${T}/cmd`, { qos: 1 });
+      client.on("message", (topic, payload) => {
+        const cmd = JSON.parse(payload.toString());
+        if (topic !== `${T}/cmd` || cmd.cmd !== "ack") return;
+        acks.push(cmd);
+        void setAlarm({ acknowledged: true, cooldown_until: new Date(Date.now() + 60_000).toISOString() });
+      });
+      await setAlarm({});
       // Clear retained status from an earlier test, then keep a fresh heartbeat going (the dashboard needs one < 3 s old).
       await client.publishAsync(`${T}/status`, "", { retain: true });
       await client.publishAsync("edgeguard/robot_cell/status", "", { retain: true });
@@ -168,10 +199,14 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await check("OK", mode === "operator" ? "running normally" : "OK");
         await send(reading(WARNING));
         await check("attention", mode === "operator" ? "Attention soon" : "WARNING");
-        await send(reading(ALARM), reading(ALARM));
+        const first = reading(ALARM);
+        await send(first, reading(ALARM));
+        await setAlarm({ state: "ACTIVE", start_ts: first.ts, peak: first, group: { count: 1, since: first.ts } }, 1);
         robot = ROBOT_STOPPED;
         await check("alarm", mode === "operator" ? "likely to fail soon" : "ALARM");
-        await send(reading({ wear: 216 }));
+        const cleared = reading({ wear: 216 });
+        await send(cleared);
+        await setAlarm({ state: "WAITING_FOR_ACK", end_ts: cleared.ts });
         await check("alarm cleared, not acknowledged", "needs your check");
         await send(...Array.from({ length: 5 }, () => reading({ drift: true, wear: 20 })));
         await check("drift", mode === "operator" ? "unusual conditions" : "Drift: predictions may be unreliable");
@@ -184,13 +219,20 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await check("buffer draining", mode === "engineer" ? "sending 43 stored" : undefined);
         uplink = { ...uplink, buffer_backlog: 0 };
         await send(reading(ALARM));
+        await setAlarm({ state: "ACTIVE", end_ts: null, group: { count: 2, since: first.ts } }, 2);
         await page.waitForTimeout(TICK_WAIT_MS);
         await page.locator(`[data-box="ack-${mode}"]`).click();
         robot = ROBOT_RUNNING;
         await check("alarm acknowledged", "Acknowledged");
-        for (let i = 0; i < 10; i++) await send(reading({ ...ALARM, truth: i % 2 === 0 }), reading({ wear: 10 }));
+        expect(acks.map((a) => a.type)).toEqual(["tool_wear"]); // the dashboard asked the edge app
+        // Cool-down: the edge app records and counts the repeats but does not latch them (alarm_suppressed).
+        for (let i = 0; i < 10; i++) {
+          await send({ ...reading({ ...ALARM, truth: i % 2 === 0 }), alarm_suppressed: true }, reading({ wear: 10 }));
+        }
+        await setAlarm({ state: "COOLDOWN", start_ts: null, peak: null, group: { count: 12, since: first.ts } }, 12);
         await check("many alarms (cool-down)", mode === "operator" ? "alarms in the last" : "no, cool-down");
-        await send(reading(ALARM));
+        await send({ ...reading(ALARM), alarm_suppressed: true });
+        await setAlarm({ group: { count: 13, since: first.ts } }, 13);
         await check("repeat during cool-down", mode === "operator" ? "Worn-out tool: \\d+ alarms in the last" : "ALARM again, in cool-down");
         await send(reading({ wear: 10 }));
         await page.locator('[data-box="pause"]').click();
