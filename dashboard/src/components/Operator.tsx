@@ -1,70 +1,91 @@
 // Operator view: readable in 5 seconds by a technician or a visitor. Plain words, one traffic light,
 // one action, one gauge. The numbers behind it are in the Engineer view.
-import { alarmSentence, headline, mainReason, PLAIN_ACTION, plainSignal, shownReading, type Light } from "../plain";
-import { formatDuration, type AlarmEvent, type LatchedAlarm } from "../stream";
-import type { Status, Telemetry } from "../types";
-import type { Connection } from "../useEdgeGuard";
-import { GLOSSARY, Help } from "./Help";
-import { ToneLabel, type Tone } from "./Tone";
+// Every card has a fixed size and every button is always there (disabled when not usable), so
+// nothing moves when the machine state changes.
+import { IxButton } from "@siemens/ix-react";
+import { groupAlarms, groupSentence, headline, mainReason, PLAIN_ACTION, PLAIN_FAILURE, shownReading, type Light } from "../plain";
+import { formatDuration, type AlarmEvent, type LatchedAlarm, type View } from "../stream";
+import { Card, GLOSSARY, Help, ICON, StateLabel, Waiting, type Tone } from "./ui";
 
-const TONE: Record<Light, Tone> = { green: "ok", amber: "warn", red: "bad", off: "idle" };
-const clock = (ts: string) => new Date(ts).toLocaleTimeString([], { hour12: false });
+export const LIGHT_TONE: Record<Light, Tone> = { green: "ok", amber: "warn", red: "bad", off: "idle" };
+const clock = (ts: string | number) => new Date(ts).toLocaleTimeString([], { hour12: false });
 
-/** The traffic light and the one sentence. Holds the Acknowledge button while an alarm is latched. */
-export function StatusHero({ latest, latched, live, now, onAck }: {
-  latest: Telemetry | null;
-  latched: LatchedAlarm | null;
+/** The one line under the status sentence: the latched alarm's time, the cool-down, or why there is nothing to acknowledge. */
+export function latchLine(view: View, now: number): string {
+  const { latched, latest } = view;
+  if (!latched) {
+    // The newest cool-down still running (after an Acknowledge, the same type does not latch again).
+    const running = Object.entries(view.cooldownUntil).filter(([, until]) => until > now).sort((a, b) => b[1] - a[1])[0];
+    if (!running) return "No alarm waiting for acknowledgement.";
+    const what = PLAIN_FAILURE[running[0]] ?? running[0];
+    return latest?.state === "ALARM" && latest.failure_type === running[0]
+      ? `Repeats of ${what} until ${clock(running[1])} are listed in the history, not raised again.`
+      : `Acknowledged. Repeats of ${what} until ${clock(running[1])} go to the history only.`;
+  }
+  if (latched.acknowledged) return "Acknowledged. The light turns green when the readings are normal again.";
+  if (latched.active) return `Alarm since ${clock(latched.startTs)} (${formatDuration(now - Date.parse(latched.startTs))}).`;
+  return `Alarm ${clock(latched.startTs)} to ${clock(latched.endTs!)}. Readings are normal again: check, then Acknowledge.`;
+}
+
+/** Acknowledge is usable only for a latched, not yet acknowledged alarm, on a live (not paused) screen. */
+export const canAck = (latched: LatchedAlarm | null, live: boolean, paused: boolean) =>
+  !!latched && !latched.acknowledged && live && !paused;
+
+/** The traffic light, the one sentence and the Acknowledge button (always in the same place). */
+export function StatusHero({ view, live, paused, now, onAck }: {
+  view: View;
   live: boolean;
+  paused: boolean;
   now: number;
   onAck: () => void;
 }) {
-  const h = headline(latest, latched, live);
+  const { latest, latched } = view;
+  const h = headline(latest, latched, live, view.alarms, now);
+  const tone = LIGHT_TONE[h.light];
+  // The sentence already says "unusual conditions" when drift is the only thing going on.
+  const showDrift = live && !!latest?.drift_warning && (!!latched || latest.state !== "OK");
   return (
-    <section className={`card hero hero-${h.light}`} aria-live="polite">
+    <section className={`card hero card-${tone}`} data-box="hero" aria-live="polite">
       <div className="lights" aria-hidden="true">
         {(["red", "amber", "green"] as const).map((c) => (
           <span key={c} className={`lamp lamp-${c}${h.light === c ? " on" : ""}`} />
         ))}
       </div>
       <div className="hero-body">
-        <div className="hero-word"><ToneLabel tone={TONE[h.light]}>{h.word}</ToneLabel></div>
+        <StateLabel tone={tone} big>{h.word}</StateLabel>
         <p className="hero-sentence">{h.sentence}</p>
-        {latched && (
-          <div className="hero-latch">
-            <span className="num">
-              {latched.active
-                ? <>Alarm since {clock(latched.startTs)} ({formatDuration(now - Date.parse(latched.startTs))})</>
-                : <>Alarm {clock(latched.startTs)}–{clock(latched.endTs!)}; readings are back to normal</>}
-            </span>
-            {latched.acknowledged
-              ? <span className="muted">Acknowledged. The light turns green when the readings are normal again.</span>
-              : <span><button className="ack" onClick={onAck}>Acknowledge</button>
-                  <Help term="Acknowledge">{GLOSSARY.acknowledge}</Help></span>}
-          </div>
-        )}
+        <p className="hero-latch num">{live ? latchLine(view, now) : " "}</p>
+        {/* Drift must stay visible even while an alarm is shown above it. The line is always reserved. */}
+        <p className="hero-note">
+          {showDrift ? <StateLabel tone="warn">Unusual conditions: the prediction may be wrong.</StateLabel> : " "}
+        </p>
+      </div>
+      <div className="hero-action">
+        <IxButton data-box="ack-operator" className="btn-ack" variant={canAck(latched, live, paused) ? "primary" : "subtle-secondary"}
+                  icon={ICON.ack} disabled={!canAck(latched, live, paused)} onClick={onAck}>Acknowledge</IxButton>
+        <Help term="Acknowledge" box="help-ack-operator">{GLOSSARY.acknowledge}</Help>
       </div>
     </section>
   );
 }
 
-/** What to do, and why, in one sentence each. */
-export function WhatToDo({ latest, latched, live }: { latest: Telemetry | null; latched: LatchedAlarm | null; live: boolean }) {
+/** What to do, and why, in one sentence each. No status colour: the status card is the one place for it. */
+export function WhatToDo({ view, live }: { view: View; live: boolean }) {
+  const { latest, latched } = view;
   if (!latest || !live) {
-    return <section className="card todo"><h2>What to do</h2><p className="todo-action muted">Nothing to show yet.</p></section>;
+    return <Card box="todo" title="What to do" icon={ICON.todo} className="todo"><Waiting /></Card>;
   }
   const m = shownReading(latest, latched);
-  const light = headline(latest, latched, live).light;
-  const reason = mainReason(m);
+  const reason = mainReason(m)
+    ?? (m.state === "OK" ? "All readings are in their usual range." : "No single reading stands out.");
   return (
-    <section className={`card todo todo-${light}`}>
-      <h2>What to do</h2>
+    <Card box="todo" title="What to do" icon={ICON.todo} className="todo">
       <p className="todo-action">{PLAIN_ACTION[m.action.code] ?? m.action.text}</p>
-      <p className="todo-reason">
-        <strong>Why: </strong>
-        {reason ?? (m.state === "OK" ? "all readings are in their usual range." : "no single reading stands out.")}
+      <p className="todo-reason"><strong>Why: </strong>{reason}</p>
+      <p className="small muted num">
+        {latched ? `From the alarm's worst reading at ${clock(m.ts)}.` : `Based on the latest reading at ${clock(m.ts)}.`}
       </p>
-      {latched && <p className="muted small">From the alarm's worst reading at {clock(m.ts)}.</p>}
-    </section>
+    </Card>
   );
 }
 
@@ -85,70 +106,50 @@ export function RiskGauge({ risk, threshold, costRatio }: { risk: number | null;
     return `M ${p1.x} ${p1.y} A ${R} ${R} 0 0 1 ${p2.x} ${p2.y}`;
   };
   const needle = risk != null ? at(frac(risk), R - 22) : null;
-  const zone = risk == null ? "idle" : risk >= t ? "bad" : risk >= t / 2 ? "warn" : "ok";
   return (
-    <section className="card gauge-card">
-      <h2>Failure risk now <Help term="Risk">{GLOSSARY.risk}</Help></h2>
-      <svg viewBox="0 0 200 116" className="gauge" role="img"
+    <Card box="gauge" title="Failure risk now" icon={ICON.gauge} className="gauge-card"
+          help={<Help term="Risk" box="help-risk-gauge">{GLOSSARY.risk}</Help>}>
+      <svg viewBox="0 0 200 112" className="gauge" role="img"
            aria-label={risk != null ? `Risk ${Math.round(risk * 100)} percent, alarm at ${Math.round(t * 100)} percent` : "No risk value yet"}>
         <path d={arc(0, frac(t / 2))} className="g-ok" />
         <path d={arc(frac(t / 2), frac(t))} className="g-warn" />
         <path d={arc(frac(t), 1)} className="g-bad" />
         {needle && <line x1="100" y1="100" x2={needle.x} y2={needle.y} className="g-needle" />}
-        <circle cx="100" cy="100" r="6" className="g-hub" />
+        <circle cx="100" cy="100" r="5" className="g-hub" />
       </svg>
-      <div className={`gauge-value tone-${zone}`}>{risk != null ? `${Math.round(risk * 100)} %` : "–"}</div>
-      <p className="muted center">
-        Alarm at {Math.round(t * 100)} % <Help term="Alarm threshold">{GLOSSARY.threshold(threshold, costRatio)}</Help>
+      <div className="gauge-value num">{risk != null ? `${Math.round(risk * 100)} %` : "–"}</div>
+      <p className="gauge-foot small muted num">
+        Alarm at {Math.round(t * 100)} %
+        <Help term="Alarm threshold" box="help-threshold-gauge">{GLOSSARY.threshold(threshold, costRatio)}</Help>
       </p>
-    </section>
+    </Card>
   );
 }
 
-/** Drift and connection problems, in plain words. Nothing is shown while all is well. */
-export function OperatorNotices({ latest, status, connection }: { latest: Telemetry | null; status: Status | null; connection: Connection }) {
-  const up = status?.uplink;
-  const notices = [];
-  if (connection !== "connected") {
-    notices.push(<div key="screen" className="banner banner-bad" role="alert">
-      <strong>This screen lost its connection.</strong> Reconnecting… The machine itself keeps running and saving data.
-    </div>);
-  } else if (up && up.state !== "up") {
-    notices.push(<div key="uplink" className="banner banner-warn" role="alert">
-      <strong>Connection to plant IT is down.</strong> Nothing is lost: {up.buffer_backlog.toLocaleString("en-US")} readings
-      are stored on the edge device <Help term="Buffer">{GLOSSARY.buffer}</Help> and will be sent automatically.
-    </div>);
-  } else if (up && up.buffer_backlog > 10) {
-    notices.push(<div key="drain" className="banner banner-ok">
-      <strong>Connection is back.</strong> Sending {up.buffer_backlog.toLocaleString("en-US")} stored readings, in order…
-    </div>);
-  }
-  if (latest?.drift_warning) {
-    const what = latest.drift_signals.map(plainSignal).join(", ") || "some readings";
-    notices.push(<div key="drift" className="banner banner-warn" role="alert">
-      <strong>Unusual conditions <Help term="Drift">{GLOSSARY.drift}</Help></strong> The {what} {latest.drift_signals.length > 1 ? "are" : "is"} outside
-      what the model learned from. Its prediction may be wrong: check the machine yourself.
-    </div>);
-  }
-  return notices.length ? <div className="notices">{notices}</div> : null;
-}
+const lasted = (a: AlarmEvent) => (a.endTs ? formatDuration(Date.parse(a.endTs) - Date.parse(a.ts)) : null);
 
-/** Alarm history as short sentences, newest first. */
-export function AlarmStory({ alarms }: { alarms: AlarmEvent[] }) {
+/** Alarm history as short sentences, newest first; repeats of one type are one line with a count. Scrolls inside. */
+export function AlarmStory({ alarms, total, now }: { alarms: AlarmEvent[]; total: number; now: number }) {
   return (
-    <section className="card">
-      <h2>Recent alarms</h2>
+    <Card box="alarms-operator" title="Recent alarms" icon={ICON.history} className="history">
       {alarms.length === 0 ? <p className="muted">No alarms yet.</p> : (
         <ul className="story">
-          {alarms.slice(0, 8).map((a) => (
-            <li key={`${a.seq}-${a.ts}`} className={a.endTs ? "" : "story-active"}>
-              {alarmSentence(a, a.endTs ? formatDuration(Date.parse(a.endTs) - Date.parse(a.ts)) : null)}
-              {a.buffered && <span className="tag">delivered late</span>}
-            </li>
-          ))}
+          {groupAlarms(alarms).slice(0, 8).map((g) => {
+            const newest = g.events[0];
+            const cooled = g.events.filter((a) => a.suppressed).length;
+            return (
+              <li key={`${newest.seq}-${newest.ts}`} className={newest.endTs ? "" : "story-active"}>
+                {groupSentence(g, now, lasted(newest))}
+                {g.events.some((a) => a.buffered) && <span className="tag">delivered late</span>}
+                {cooled > 0 && <span className="tag">{cooled} during cool-down</span>}
+              </li>
+            );
+          })}
         </ul>
       )}
-      <p className="muted small">"Replay check" compares with what really happened in the recorded data.</p>
-    </section>
+      <p className="small muted card-foot">
+        {total} alarm{total === 1 ? "" : "s"} counted. "Replay check" compares with what really happened in the recorded data.
+      </p>
+    </Card>
   );
 }

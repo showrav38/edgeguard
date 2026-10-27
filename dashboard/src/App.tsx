@@ -2,20 +2,24 @@
 //   Operator view (default): traffic light + one sentence, what to do and why, risk gauge,
 //     risk and tool-wear charts, alarm history as sentences. Readable in 5 seconds.
 //   Engineer view: data-flow strip, latency, buffer, drift numbers, all signal charts, demo controls.
-// "Show me how it works" opens a 4-step guided demo on top of the Operator view.
+// "Guided demo" opens a 4-step tour that lies over the "Recent alarms" card (never over the charts).
+//
+// Stable layout (docs/decisions.md D-27): every card and button has a fixed place and size in both views.
+// A state change only changes text and colour inside an element; nothing appears, disappears or moves.
+// e2e/layout.e2e.ts checks this in a headless browser.
 import { useState } from "react";
 import { AlarmHistory } from "./components/AlarmHistory";
-import { ActionCard, DriftBanner, StatusCard } from "./components/Cards";
+import { ActionCard, DataQuality, StatusCard } from "./components/Cards";
 import { Charts, OperatorCharts } from "./components/Charts";
 import { DemoControls } from "./components/DemoControls";
 import { FlowStrip } from "./components/FlowStrip";
 import { GuidedDemo } from "./components/GuidedDemo";
-import { AlarmStory, OperatorNotices, RiskGauge, StatusHero, WhatToDo } from "./components/Operator";
-import { useEdgeGuard, useNow } from "./useEdgeGuard";
+import { connectionState, Header, type Mode } from "./components/Header";
+import { AlarmStory, RiskGauge, StatusHero, WhatToDo } from "./components/Operator";
+import { toggleTheme } from "./theme";
+import { useEdgeGuard } from "./useEdgeGuard";
 
 const HEARTBEAT_TIMEOUT_MS = 3000; // the edge app sends a status every second
-
-type Mode = "operator" | "engineer";
 
 // The chosen view is remembered per browser (a convenience only; storage may be blocked).
 function loadMode(): Mode {
@@ -27,8 +31,8 @@ function loadMode(): Mode {
 }
 
 export default function App() {
-  const { view, status, statusAt, connection, duplicates, received, send, ack, url } = useEdgeGuard();
-  const now = useNow(1000);
+  const { screen, paused, togglePause, send, ack } = useEdgeGuard();
+  const { view, status, statusAt, connection, received, duplicates, now } = screen;
   const [mode, setModeState] = useState<Mode>(loadMode);
   const [tour, setTour] = useState(false);
   const heartbeatFresh = statusAt != null && now - statusAt < HEARTBEAT_TIMEOUT_MS;
@@ -41,54 +45,38 @@ export default function App() {
   const startTour = () => { setMode("operator"); setTour(true); };
 
   return (
-    <div className={`page${tour ? " with-tour" : ""}`}>
-      <header className="header">
-        <div>
-          <h1>EdgeGuard <span className="muted">· Machine 1</span></h1>
-          <p className="muted small">
-            Predictive maintenance at the edge{mode === "engineer" && ` · broker ${url}`}
-            {status && ` · model ${status.model_version}`}
-          </p>
-        </div>
-        <div className="header-actions">
-          <div className="segmented view-toggle" role="group" aria-label="View">
-            <button aria-pressed={mode === "operator"} onClick={() => setMode("operator")}>Operator view</button>
-            <button aria-pressed={mode === "engineer"} onClick={() => setMode("engineer")}>Engineer view</button>
-          </div>
-          {!tour && <button className="primary" onClick={startTour}>Show me how it works</button>}
-        </div>
-      </header>
+    <div className="page">
+      <Header conn={connectionState(connection, edgeRunning, status, paused)} model={status?.model_version ?? null}
+              mode={mode} setMode={setMode} paused={paused} onPause={togglePause}
+              tourOpen={tour} onTour={startTour} onTheme={toggleTheme} />
 
-      {mode === "operator" ? (
-        <>
-          <OperatorNotices latest={view.latest} status={status} connection={connection} />
-          <StatusHero latest={view.latest} latched={view.latched} live={edgeRunning} now={now} onAck={ack} />
-          <div className="op-grid">
-            <WhatToDo latest={view.latest} latched={view.latched} live={edgeRunning} />
+      <main className="content">
+        {mode === "operator" ? (
+          <div className="grid op">
+            <StatusHero view={view} live={edgeRunning} paused={paused} now={now} onAck={ack} />
+            <WhatToDo view={view} live={edgeRunning} />
             <RiskGauge risk={edgeRunning ? view.latest?.risk ?? null : null} threshold={status?.threshold} costRatio={status?.cost_ratio} />
+            <OperatorCharts points={view.points} threshold={status?.threshold} costRatio={status?.cost_ratio} />
+            <div className="history-slot">
+              <AlarmStory alarms={view.alarms} total={view.alarmTotal} now={now} />
+              {tour && <GuidedDemo view={view} status={status} enabled={edgeRunning} send={send} onClose={() => setTour(false)} />}
+            </div>
           </div>
-          <OperatorCharts points={view.points} threshold={status?.threshold} costRatio={status?.cost_ratio} />
-          <AlarmStory alarms={view.alarms} />
-        </>
-      ) : (
-        <>
-          <FlowStrip status={status} heartbeatFresh={heartbeatFresh} connection={connection}
-                     liveAgeMs={view.liveAgeMs} received={received} duplicates={duplicates} />
-          <DriftBanner m={view.latest} />
-          <div className="grid-2">
-            <StatusCard m={view.latest} latched={view.latched} now={now} onAck={ack}
+        ) : (
+          <div className="grid eng">
+            <FlowStrip status={status} heartbeatFresh={heartbeatFresh} connection={connection}
+                       liveAgeMs={view.liveAgeMs} received={received} duplicates={duplicates} />
+            <StatusCard view={view} live={edgeRunning} paused={paused} now={now} onAck={ack}
                         threshold={status?.threshold} costRatio={status?.cost_ratio} />
             <ActionCard latest={view.latest} latched={view.latched} />
-          </div>
-          <Charts points={view.points} threshold={status?.threshold} />
-          <div className="grid-2">
-            <AlarmHistory alarms={view.alarms} />
+            <DataQuality m={view.latest} />
+            <Charts points={view.points} threshold={status?.threshold} />
+            <AlarmHistory view={view} />
             <DemoControls status={status} enabled={edgeRunning} send={send} />
           </div>
-        </>
-      )}
+        )}
+      </main>
 
-      {tour && <GuidedDemo view={view} status={status} enabled={edgeRunning} send={send} onClose={() => setTour(false)} />}
     </div>
   );
 }

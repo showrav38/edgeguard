@@ -27,3 +27,7 @@ dashboard/dist/
 
 # --- Personal instructions for Claude Code (kept out of git) ---
 CLAUDE.md
+
+# --- Playwright (dashboard/e2e) output ---
+dashboard/test-results/
+dashboard/playwright-report/

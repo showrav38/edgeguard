@@ -5,6 +5,6 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: { port: 5173 },
-  // recharts + mqtt.js make one ~870 kB bundle; fine for a dashboard served on the local network.
-  build: { chunkSizeWarningLimit: 1000 },
+  // iX + recharts + mqtt.js make one ~1.2 MB bundle; fine for a dashboard served on the local network.
+  build: { chunkSizeWarningLimit: 1300 },
 });

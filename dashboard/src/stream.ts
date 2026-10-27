@@ -3,7 +3,13 @@
 import type { Telemetry } from "./types";
 
 export const HISTORY_POINTS = 100; // points per live chart
-export const ALARM_EVENTS = 20; // rows in the alarm history
+export const ALARM_EVENTS = 200; // rows in the alarm history (the counters below count every alarm)
+// Alarm rate window. ISA-18.2 calls more than 10 alarms in 10 min per operator an alarm flood.
+export const RATE_WINDOW_MS = 10 * 60_000;
+export const FLOOD_PER_WINDOW = 10;
+// After Acknowledge, the same failure type does not latch again for this long (VITE_ACK_COOLDOWN_S, default 60 s).
+// Its alarms are still recorded and counted; they only do not take over the screen again.
+export const ACK_COOLDOWN_MS = 1000 * Number(import.meta.env.VITE_ACK_COOLDOWN_S ?? 60);
 
 /**
  * Drops duplicate telemetry by seq.
@@ -57,6 +63,7 @@ export interface AlarmEvent {
   actualFailure: boolean;
   actualType: string;
   buffered: boolean;
+  suppressed: boolean; // arrived during the cool-down after an Acknowledge of the same type: did not latch
 }
 
 /**
@@ -66,6 +73,8 @@ export interface AlarmEvent {
  *   - active = the latest reading is still ALARM; endTs = when it left ALARM
  *   - Acknowledge while active -> acknowledged, removed when the readings leave ALARM
  *   - Acknowledge after it cleared -> removed at once
+ *   - Acknowledge also starts a cool-down for the alarm's failure type: during it, a new alarm of that
+ *     type does not latch again (alarm flood handling); a different type latches as usual
  */
 export interface LatchedAlarm {
   startSeq: number;
@@ -84,15 +93,28 @@ export interface View {
   liveAgeMs: number | null; // edge app -> browser, last non-buffered message
   missing: number; // readings never received: gaps in seq (should stay 0 through an outage)
   bufferedReceived: number; // readings delivered late from the edge app's buffer
+  cooldownUntil: Record<string, number>; // failure type -> end of its cool-down (ms, browser clock)
+  alarmTotal: number; // every alarm since the page opened, also those no longer in `alarms`
+  alarmFalse: number; // ... of which no real failure happened (replay ground truth)
+  recentAlarmMs: number[]; // alarm start times within RATE_WINDOW_MS of the latest reading
+  firstTs: number | null; // time of the first reading (the rate needs to know how long we have watched)
 }
 
 export const emptyView: View = {
   latest: null, points: [], alarms: [], latched: null, liveAgeMs: null, missing: 0, bufferedReceived: 0,
+  cooldownUntil: {}, alarmTotal: 0, alarmFalse: 0, recentAlarmMs: [], firstTs: null,
 };
 
-function updateLatch(latched: LatchedAlarm | null, m: Telemetry): LatchedAlarm | null {
+/** True if a reading of this failure type falls into the cool-down after an Acknowledge. */
+export function inCooldown(view: Pick<View, "cooldownUntil">, failureType: string, tsMs: number): boolean {
+  const until = view.cooldownUntil[failureType];
+  return until != null && tsMs < until;
+}
+
+function updateLatch(latched: LatchedAlarm | null, m: Telemetry, suppressed: boolean): LatchedAlarm | null {
   if (m.state === "ALARM") {
     if (!latched) {
+      if (suppressed) return null; // acknowledged a moment ago: recorded in the history, not latched again
       return { startSeq: m.seq, startTs: m.ts, peak: m, active: true, endTs: null, acknowledged: false };
     }
     // Same latched alarm (it may have cleared and come back before anyone acknowledged it).
@@ -103,10 +125,22 @@ function updateLatch(latched: LatchedAlarm | null, m: Telemetry): LatchedAlarm |
   return latched.acknowledged ? null : { ...latched, active: false, endTs: m.ts };
 }
 
-export function acknowledge(view: View): View {
+export function acknowledge(view: View, nowMs: number, cooldownMs = ACK_COOLDOWN_MS): View {
   const l = view.latched;
   if (!l) return view;
-  return { ...view, latched: l.active ? { ...l, acknowledged: true } : null };
+  return {
+    ...view,
+    latched: l.active ? { ...l, acknowledged: true } : null,
+    cooldownUntil: { ...view.cooldownUntil, [l.peak.failure_type]: nowMs + cooldownMs },
+  };
+}
+
+/** Alarms per hour over the last RATE_WINDOW_MS (or over the time watched, if shorter). null under 1 min. */
+export function alarmRatePerHour(view: View): number | null {
+  if (!view.latest || view.firstTs == null) return null;
+  const watched = Math.min(RATE_WINDOW_MS, Date.parse(view.latest.ts) - view.firstTs);
+  if (watched < 60_000) return null;
+  return (view.recentAlarmMs.length / watched) * 3_600_000;
 }
 
 /** "45 s", "3 min 12 s", "1 h 05 min" */
@@ -134,7 +168,11 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
   const points = [...view.points, point].slice(-HISTORY_POINTS);
 
   // A new alarm EVENT is the step into ALARM, not every reading while it stays in ALARM.
+  const tsMs = Date.parse(m.ts);
+  const suppressed = m.state === "ALARM" && !view.latched && inCooldown(view, m.failure_type, tsMs);
   let alarms = view.alarms;
+  let { alarmTotal, alarmFalse } = view;
+  let recentAlarmMs = view.recentAlarmMs.filter((t) => t > tsMs - RATE_WINDOW_MS);
   if (m.state === "ALARM" && view.latest?.state !== "ALARM") {
     const event: AlarmEvent = {
       seq: m.seq,
@@ -146,8 +184,12 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
       actualFailure: m.ground_truth.failure,
       actualType: m.ground_truth.type,
       buffered: m.buffered,
+      suppressed,
     };
     alarms = [event, ...alarms].slice(0, ALARM_EVENTS);
+    alarmTotal += 1;
+    alarmFalse += m.ground_truth.failure ? 0 : 1;
+    recentAlarmMs = [...recentAlarmMs, tsMs];
   } else if (m.state !== "ALARM" && alarms[0] && alarms[0].endTs === null) {
     alarms = [{ ...alarms[0], endTs: m.ts }, ...alarms.slice(1)];
   }
@@ -158,8 +200,10 @@ export function addTelemetry(view: View, m: Telemetry, nowMs: number): View {
   const prevSeq = view.latest?.seq;
   const gap = prevSeq != null && m.seq > prevSeq + 1 ? m.seq - prevSeq - 1 : 0;
   return {
-    latest: m, points, alarms, latched: updateLatch(view.latched, m), liveAgeMs,
+    latest: m, points, alarms, latched: updateLatch(view.latched, m, suppressed), liveAgeMs,
     missing: view.missing + gap,
     bufferedReceived: view.bufferedReceived + (m.buffered ? 1 : 0),
+    cooldownUntil: view.cooldownUntil, alarmTotal, alarmFalse, recentAlarmMs,
+    firstTs: view.firstTs ?? tsMs,
   };
 }

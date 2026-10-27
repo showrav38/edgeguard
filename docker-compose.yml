@@ -65,7 +65,10 @@ services:
     restart: unless-stopped
 
   dashboard:
-    build: { context: ., dockerfile: docker/dashboard.Dockerfile }
+    build:
+      context: .
+      dockerfile: docker/dashboard.Dockerfile
+      args: { VITE_ACK_COOLDOWN_S: "${ACK_COOLDOWN_S:-60}" }
     image: edgeguard-dashboard
     ports:
       - "8080:80"

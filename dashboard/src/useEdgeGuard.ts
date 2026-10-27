@@ -1,4 +1,8 @@
 // MQTT connection to the broker (websockets) and the dashboard state built from the messages.
+//
+// Calm updates: messages are collected as they arrive, but the SCREEN changes at most once per
+// second (one "tick" applies all new telemetry, the latest status and the clock in one render).
+// Pause freezes the screen; messages keep being collected and Resume applies them all at once.
 import mqtt, { type MqttClient } from "mqtt";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { acknowledge, addTelemetry, emptyView, SeqDeduper, type View } from "./stream";
@@ -9,23 +13,39 @@ const MQTT_URL = import.meta.env.VITE_MQTT_URL ?? `ws://${window.location.hostna
 const TOPIC_TELEMETRY = "edgeguard/machine1/telemetry";
 const TOPIC_STATUS = "edgeguard/machine1/status";
 const TOPIC_CMD = "edgeguard/machine1/cmd";
-const FLUSH_MS = 200; // apply queued telemetry to the view at most 5x per second
+const TICK_MS = 1000; // the screen updates at most once per second
 
 export type Connection = "connecting" | "connected" | "reconnecting" | "offline";
 
+/** What one render shows. Frozen as a whole while paused. */
+export interface Screen {
+  view: View;
+  status: Status | null;
+  statusAt: number | null; // when the last heartbeat arrived
+  connection: Connection;
+  received: number;
+  duplicates: number;
+  now: number;
+}
+
+const firstScreen = (): Screen => ({
+  view: emptyView, status: null, statusAt: null, connection: "connecting", received: 0, duplicates: 0, now: Date.now(),
+});
+
 export function useEdgeGuard() {
-  const [view, setView] = useState<View>(emptyView);
-  const [status, setStatus] = useState<Status | null>(null);
-  const [statusAt, setStatusAt] = useState<number | null>(null); // when the last heartbeat arrived
-  const [connection, setConnection] = useState<Connection>("connecting");
-  const [duplicates, setDuplicates] = useState(0);
-  const [received, setReceived] = useState(0);
+  const [screen, setScreen] = useState<Screen>(firstScreen);
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
 
   const clientRef = useRef<MqttClient | null>(null);
   const deduper = useRef(new SeqDeduper());
-  // Messages wait here until the next flush. After an outage the edge app drains its buffer at
-  // ~150 msg/s; re-rendering the charts for every single message would freeze the page.
+  // Everything that arrived since the last tick. After an outage the edge app drains its buffer at
+  // ~150 msg/s; applying them once per tick keeps the page calm and fast.
   const pending = useRef<{ m: Telemetry; at: number }[]>([]);
+  const latest = useRef({ status: null as Status | null, statusAt: null as number | null,
+                          connection: "connecting" as Connection, duplicates: 0 });
+  // The live state keeps advancing while the screen is paused, so Resume can catch up.
+  const live = useRef<Screen>(firstScreen());
 
   useEffect(() => {
     const client = mqtt.connect(MQTT_URL, {
@@ -36,11 +56,11 @@ export function useEdgeGuard() {
     clientRef.current = client;
 
     client.on("connect", () => {
-      setConnection("connected");
+      latest.current.connection = "connected";
       client.subscribe([TOPIC_TELEMETRY, TOPIC_STATUS], { qos: 1 });
     });
-    client.on("reconnect", () => setConnection("reconnecting"));
-    client.on("close", () => setConnection("offline"));
+    client.on("reconnect", () => { latest.current.connection = "reconnecting"; });
+    client.on("close", () => { latest.current.connection = "offline"; });
 
     client.on("message", (topic, payload) => {
       let data: unknown;
@@ -50,28 +70,34 @@ export function useEdgeGuard() {
         return; // not JSON: ignore
       }
       if (topic === TOPIC_STATUS) {
-        setStatus(data as Status);
-        setStatusAt(Date.now());
+        latest.current.status = data as Status;
+        latest.current.statusAt = Date.now();
         return;
       }
       const m = data as Telemetry;
       if (!deduper.current.accept(m.seq, m.ts)) {
-        setDuplicates(deduper.current.dropped);
+        latest.current.duplicates = deduper.current.dropped;
         return;
       }
       pending.current.push({ m, at: Date.now() });
     });
 
-    const flush = setInterval(() => {
+    const tick = setInterval(() => {
       const batch = pending.current;
-      if (batch.length === 0) return;
       pending.current = [];
-      setView((v) => batch.reduce((acc, { m, at }) => addTelemetry(acc, m, at), v));
-      setReceived((n) => n + batch.length);
-    }, FLUSH_MS);
+      const prev = live.current;
+      live.current = {
+        ...prev,
+        ...latest.current,
+        view: batch.reduce((acc, { m, at }) => addTelemetry(acc, m, at), prev.view),
+        received: prev.received + batch.length,
+        now: Date.now(),
+      };
+      if (!pausedRef.current) setScreen(live.current);
+    }, TICK_MS);
 
     return () => {
-      clearInterval(flush);
+      clearInterval(tick);
       client.end(true);
     };
   }, []);
@@ -80,18 +106,17 @@ export function useEdgeGuard() {
     clientRef.current?.publish(TOPIC_CMD, JSON.stringify(cmd), { qos: 1 });
   }, []);
 
-  // Acknowledge is local to this browser (see docs/decisions.md D-22).
-  const ack = useCallback(() => setView((v) => acknowledge(v)), []);
+  // Acknowledge is local to this browser (see docs/decisions.md D-22). Shown at once: it is the user's own action.
+  const ack = useCallback(() => {
+    live.current = { ...live.current, view: acknowledge(live.current.view, Date.now()) };
+    setScreen(live.current);
+  }, []);
 
-  return { view, status, statusAt, connection, duplicates, received, send, ack, url: MQTT_URL };
-}
+  const togglePause = useCallback(() => {
+    pausedRef.current = !pausedRef.current;
+    setPaused(pausedRef.current);
+    if (!pausedRef.current) setScreen(live.current); // Resume: catch up at once
+  }, []);
 
-/** Re-render every `ms` so "seconds ago" and heartbeat timeouts stay current. */
-export function useNow(ms = 1000): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(t);
-  }, [ms]);
-  return now;
+  return { screen, paused, togglePause, send, ack, url: MQTT_URL };
 }

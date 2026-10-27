@@ -1,16 +1,19 @@
 // Data-flow strip: PLC -> Edge app -> MQTT uplink -> Dashboard, each hop with its live state and
 // latency. Health comes from the 1 s status heartbeat, which is NOT buffered, so the strip keeps
 // updating during an uplink outage while the telemetry itself waits in the edge app's buffer.
+// Connection problems are amber, not red: red is reserved for an active machine alarm.
+import { IxIcon } from "@siemens/ix-react";
 import { int, ms } from "../format";
 import type { Connection } from "../useEdgeGuard";
 import type { Status } from "../types";
-import { GLOSSARY, Help } from "./Help";
-import { ToneLabel, type Tone } from "./Tone";
+import { GLOSSARY, Help, ICON, StateLabel, type Tone } from "./ui";
 
 const DRAINING_MIN = 10;
 
 interface Hop {
+  box: string;
   name: string;
+  icon: string;
   tone: Tone;
   state: string;
   latency: string;
@@ -34,8 +37,8 @@ export function FlowStrip({ status, heartbeatFresh, connection, liveAgeMs, recei
   const up = status?.uplink;
 
   const plcHop: Hop = {
-    name: "PLC",
-    tone: !edgeKnown ? "idle" : plc?.connected ? "ok" : "bad",
+    box: "flow-plc", name: "PLC", icon: ICON.plc,
+    tone: !edgeKnown ? "idle" : plc?.connected ? "ok" : "warn",
     state: !edgeKnown ? "unknown" : plc?.connected ? "connected" : "no data",
     latency: ms(plc?.io_ms),
     latencyLabel: "OPC UA read + write",
@@ -43,39 +46,34 @@ export function FlowStrip({ status, heartbeatFresh, connection, liveAgeMs, recei
   };
 
   const edgeHop: Hop = {
-    name: "Edge app",
-    tone: edgeKnown ? "ok" : status?.state === "offline" ? "bad" : "idle",
+    box: "flow-edge", name: "Edge app", icon: ICON.edge,
+    tone: edgeKnown ? "ok" : status?.state === "offline" ? "warn" : "idle",
     state: edgeKnown ? "running" : status?.state === "offline" ? "offline" : online ? "no heartbeat" : "unknown",
     latency: ms(status?.edge?.inference_ms),
     latencyLabel: "inference + explanation",
     detail: status ? `model ${status.model_version}` : "–",
   };
 
-  let mqttHop: Hop;
+  let mqttHop: Hop = { box: "flow-uplink", name: "MQTT uplink", icon: ICON.uplink, tone: "idle", state: "unknown",
+                       latency: "–", latencyLabel: "publish → ack", detail: "–" };
   if (!online) {
-    mqttHop = { name: "MQTT uplink", tone: "bad", state: "broker unreachable", latency: "–",
-                latencyLabel: "publish → ack", detail: "seen from the dashboard" };
-  } else if (!edgeKnown || !up) {
-    mqttHop = { name: "MQTT uplink", tone: "idle", state: "unknown", latency: "–",
-                latencyLabel: "publish → ack", detail: "–" };
-  } else if (up.state === "up") {
+    mqttHop = { ...mqttHop, tone: "warn", state: "broker unreachable", detail: "seen from the dashboard" };
+  } else if (edgeKnown && up && up.state === "up") {
     // A backlog of 1-2 is normal (the message waiting for its PUBACK); more means catching up.
     const draining = up.buffer_backlog > DRAINING_MIN;
-    mqttHop = { name: "MQTT uplink", tone: draining ? "warn" : "ok",
-                state: draining ? `draining ${int(up.buffer_backlog)}` : "up",
-                latency: ms(up.ack_ms), latencyLabel: "publish → ack",
-                detail: `${int(up.buffer_dropped)} dropped (buffer full)` };
-  } else {
+    mqttHop = { ...mqttHop, tone: draining ? "info" : "ok", state: draining ? `sending ${int(up.buffer_backlog)} stored` : "up",
+                latency: ms(up.ack_ms), detail: `${int(up.buffer_dropped)} dropped (buffer full)` };
+  } else if (edgeKnown && up) {
     const simulated = up.state === "simulated_down";
-    mqttHop = { name: "MQTT uplink", tone: "bad",
-                state: simulated ? `outage (simulated) · ${Math.ceil(up.outage_remaining_s)} s` : "down",
-                latency: `${int(up.buffer_backlog)} buffered`, latencyLabel: "stored in the edge app",
+    mqttHop = { ...mqttHop, tone: "warn",
+                state: simulated ? `outage (simulated), ${Math.ceil(up.outage_remaining_s)} s` : "down",
+                latency: `${int(up.buffer_backlog)} stored`, latencyLabel: "in the edge buffer",
                 detail: `max ${int(up.buffer_max)} · ${int(up.buffer_dropped)} dropped` };
   }
 
   const dashHop: Hop = {
-    name: "Dashboard",
-    tone: online ? "ok" : "bad",
+    box: "flow-screen", name: "Dashboard", icon: ICON.screen,
+    tone: online ? "ok" : "warn",
     state: connection,
     latency: online ? ms(liveAgeMs) : "–",
     latencyLabel: "edge → browser (live)",
@@ -86,15 +84,16 @@ export function FlowStrip({ status, heartbeatFresh, connection, liveAgeMs, recei
   return (
     <section className="flow" aria-label="Data flow">
       {hops.map((h, i) => (
-        <div className="flow-item" key={h.name}>
-          <div className={`flow-box flow-${h.tone}`}>
-            <div className="flow-name">{h.name}{h.name === "MQTT uplink" && <Help term="Buffer">{GLOSSARY.buffer}</Help>}</div>
-            <ToneLabel tone={h.tone}>{h.state}</ToneLabel>
-            <div className="flow-latency">{h.latency}</div>
-            <div className="muted small">{h.latencyLabel}{i === 0 && <Help term="Latency">{GLOSSARY.latency}</Help>}</div>
-            <div className="muted small">{h.detail}</div>
+        <div className={`card flow-box card-${h.tone}`} data-box={h.box} key={h.name}>
+          <div className="flow-name">
+            <IxIcon name={h.icon} size="16" aria-hidden="true" /> {h.name}
+            {i === 2 && <Help term="Buffer" box="help-buffer">{GLOSSARY.buffer}</Help>}
+            {i === 0 && <Help term="Latency" box="help-latency">{GLOSSARY.latency}</Help>}
           </div>
-          {i < hops.length - 1 && <div className="flow-arrow" aria-hidden="true">→</div>}
+          <div className="one-line"><StateLabel tone={h.tone}>{h.state}</StateLabel></div>
+          <div className="flow-latency num">{h.latency}</div>
+          <div className="small muted one-line">{h.latencyLabel}</div>
+          <div className="small muted num one-line">{h.detail}</div>
         </div>
       ))}
     </section>

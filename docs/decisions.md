@@ -253,3 +253,58 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
 - **Alternatives:** fixed sleeps only (breaks when the alarm comes later); clicking through the guided tour by hand.
 - **Why:** repeatable for a screen recording, and every claim on screen is checked live, not scripted text. The
   outage is simulated in the edge app (D-18); the real broker stop stays in the M4 check.
+
+### D-27 — Stable layout, a simpler Operator view, and Siemens iX (dashboard rework)
+- **Decision:** every card and button has a fixed place and a fixed size per screen width; a state change only changes
+  text and colour inside an element. Buttons are always there and disabled when not usable (Acknowledge, demo controls);
+  banners that appeared and pushed the page down are replaced by reserved lines (status card) and an always-present
+  "Data quality" card; long text is clipped to its lines, lists scroll inside their card. The screen updates at most
+  once per second; Pause freezes it while data keeps arriving. Built on Siemens iX (open source, MIT): classic theme, iX
+  tokens for colour, spacing, type and shadows, iX buttons, toggles, tooltips and icons. Colour means status only; data
+  lines are neutral; the iX primary colour is kept for the one main action (Acknowledge, Next).
+- **Alternatives:** keep the custom CSS (worked, but no design system behind it); hide buttons that cannot be used
+  (fewer elements, but they jump); `ix-application-header` (folds buttons into a menu on phones, so they move);
+  `@siemens/ix-echarts` (would mean replacing the working recharts charts; kept recharts styled with iX tokens).
+- **Why:** in testing, the Acknowledge button moved when the state changed, so it could not be clicked: in an alarm
+  the one thing an operator must do was the hardest. `e2e/layout.e2e.ts` measures the box of every card and button in
+  both views at desktop and phone width through OK, attention, alarm, drift, outage, acknowledged and paused, and fails
+  on more than 2 px. A deliberately conditional button makes it fail (checked). iX gives an industrial look and
+  accessible components without designing them myself.
+- **Limits:** the theme's own font is not in the open-source package (system UI font instead); the JS bundle grew to
+  ~1.2 MB. (The guided demo panel used to float over the charts; since D-30 it lies over the alarm history.)
+
+### D-28 — Alarm flood: cool-down after Acknowledge, grouped repeats, alarm rate (dashboard only)
+- **Decision:** after Acknowledge, the same failure type does not latch again for `ACK_COOLDOWN_S` (default 60 s).
+  Those alarms are still recorded (marked "no, cool-down" in the Engineer table) and counted. The Operator history
+  groups repeats of one type ("Power problem: 4 alarms in the last 3 min"; a gap over 5 min starts a new group). The
+  Engineer view shows alarms per hour over the last 10 min, the total, and the false share. Model and threshold
+  are unchanged.
+- **Evidence:** "Act now" kept coming back after Acknowledge. Acknowledge worked; new alarms kept arriving. On the
+  replay at 1x, the threshold 0.16 gives about 1 ALARM reading per 12 s, 80 % false. Drift mode was off.
+- **Alternatives:** raise the threshold (undoes the cost decision D-05); require 2 alarm readings in a row (rows
+  are independent samples, so this mostly hides real one-row failures); suppress every type after an acknowledge
+  (would hide a new, different failure).
+- **Why:** this follows ISA-18.2 practice (flood > 10 alarms in 10 min; shelve or suppress repeats, never lose
+  them). Limits: the cool-down is per browser tab and compares browser time with the edge app's reading
+  time (same host here). It treats the symptom; model v2 (M7) is the fix.
+
+### D-29 — "Why" in the Operator view is phrased by failure type
+- **Decision:** the Operator reason uses the predicted type's own quantity: power = torque × speed against
+  3.5–9 kW, tool use time against ~200 min, process − air temperature with speed against 8.6 K / 1380 rpm,
+  tool wear × torque against 11/12/13k min·Nm (L/M/H). The numbers are the same as in `training/rules_check.py`.
+  The Engineer view keeps the model's top 2 occlusion factors.
+- **Alternatives:** the top occlusion factor (what v1 did): for a power alarm it could say "process temperature
+  unusual", which matched neither the type nor the action.
+- **Why:** reason, type and action must tell one story. Limit: the sentence describes the dataset's failure
+  physics, not the model's internals; the two can disagree, and the Engineer view shows both.
+
+### D-30 — Calmer colours and a guided demo that never covers the charts
+- **Decision:** red only for an active alarm (risk above the threshold now), in one place per view (the status
+  card). An alarm that is over but not acknowledged, and a repeat during the cool-down, are amber ("Alarm at
+  <time> needs your check"). Gauge, chart threshold and alarm markers are neutral; connection problems are amber.
+  The accent colour is only on Acknowledge (pressed toggles and the tour buttons are neutral). The tour panel lies
+  exactly over the "Recent alarms" card. On a phone, the Engineer view uses one column and stacks the alarm table
+  rows.
+- **Alternatives:** keep the panel floating (covers charts); a side drawer (moves the layout).
+- **Why:** when everything is red, nothing is. The layout test now also fails if the tour covers a chart, or if
+  the Engineer phone view clips any text or scrolls sideways.
