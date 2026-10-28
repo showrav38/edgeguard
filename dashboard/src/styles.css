@@ -66,7 +66,6 @@ h1, h2, h3, p, ul, dl { margin: 0; }
 .header-actions { display: flex; align-items: center; gap: var(--theme-space-1); }
 .pause-wrap { display: inline-flex; align-items: center; }
 .btn-pause { width: 112px; }
-.btn-tour { width: 144px; }
 .view-toggle { display: inline-flex; }
 .view-toggle ix-toggle-button { width: 104px; }
 ix-button, ix-toggle-button { display: inline-block; }
@@ -161,7 +160,6 @@ ix-icon-button.help { flex: none; }
 .dot-key { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--theme-color-std-text); }
 
 .history { grid-column: 1 / -1; height: 280px; }
-.history-slot { grid-column: 1 / -1; position: relative; } /* the guided demo panel lies over this card */
 .story { list-style: none; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
 .story li { padding: var(--theme-space-1) 0; border-bottom: 1px solid var(--theme-color-weak-bdr); font: var(--theme-body); }
 .story-active { font-weight: var(--theme-font-weight-bold); }
@@ -217,30 +215,6 @@ th:first-child, td:first-child { text-align: left; }
 .speeds { display: inline-flex; }
 .speeds ix-toggle-button { width: 72px; }
 
-/* ---------- guided demo: lies exactly over the "Recent alarms" card, never over the charts ---------- */
-.tour {
-  position: absolute; inset: 0;
-  display: flex; flex-direction: column; gap: var(--theme-space-1);
-  padding: var(--theme-space-3);
-  background: var(--theme-color-2);
-  border: 1px solid var(--theme-color-soft-bdr);
-  border-left: 4px solid var(--theme-color-soft-bdr);
-  border-radius: var(--theme-default-border-radius);
-  box-shadow: var(--theme-shadow-4);
-  z-index: 10;
-}
-.tour-head { display: flex; align-items: center; gap: var(--theme-space-1); height: 32px; }
-.tour-head ix-icon-button { margin-left: auto; }
-.tour-steps { display: inline-flex; gap: var(--theme-space--1); }
-.tour-steps span { width: 24px; height: 4px; border-radius: 2px; background: var(--theme-color-3); }
-.tour-steps span.done { background: var(--theme-color-soft-text); }
-.tour-steps span.on { background: var(--theme-color-std-text); }
-.tour-title { font: var(--theme-h4); height: 24px; }
-.tour-caption { font: var(--theme-body); height: 60px; overflow: hidden; }
-.tour-live { font: var(--theme-body); height: 20px; color: var(--theme-color-soft-text); }
-.tour-nav { display: flex; justify-content: flex-end; gap: var(--theme-space-1); margin-top: auto; }
-.btn-nav { width: 112px; }
-
 /* ---------- narrower screens: same elements, same order, different fixed sizes ---------- */
 @media (max-width: 1100px) {
   .header { grid-template-columns: auto 1fr; grid-template-rows: 56px 48px; height: 104px; row-gap: 0; }
@@ -259,14 +233,12 @@ th:first-child, td:first-child { text-align: left; }
   .content { padding: var(--theme-space-3); }
   .header { grid-template-columns: 1fr auto; grid-template-rows: 48px 40px 96px; height: 184px; padding: 0 var(--theme-space-3); }
   .header-status { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
-  /* Two fixed rows of controls: Pause, help, guided demo, theme / view toggle. Wrapping depends only on width. */
+  /* Two fixed rows of controls: Pause, help, theme / view toggle. Wrapping depends only on width. */
   .header-actions { grid-column: 1 / -1; grid-row: 3; gap: var(--theme-space--1) var(--theme-space-1); flex-wrap: wrap; align-content: center; }
   .header-actions [data-box="theme"] { order: 1; }
   .view-toggle { order: 2; width: 100%; }
   .conn { width: 248px; }
   .btn-pause { width: 96px; }
-  .btn-tour { width: 40px; }
-  .btn-tour .btn-label { display: none; }
   .hero { height: 352px; flex-wrap: wrap; align-content: center; row-gap: var(--theme-space-3); }
   .hero-body { flex-basis: calc(100% - 64px); }
   .hero-sentence { white-space: normal; height: 120px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
@@ -276,8 +248,7 @@ th:first-child, td:first-child { text-align: left; }
   .state-big .state-text { font: var(--theme-h2); }
   .hero-action { width: 100%; justify-content: flex-end; }
   .todo { height: 256px; }
-  .op .history { height: 304px; } /* also the guided demo panel's height */
-  .tour-caption { height: 100px; }
+  .op .history { height: 304px; }
   .view-toggle ix-toggle-button { width: 50%; }
 
   /* Engineer view on a phone: no text cut off, no sideways scrolling. */

@@ -3,7 +3,7 @@
 // the accent colour for the one main action button (Acknowledge).
 import { IxIcon, IxIconButton, IxTooltip } from "@siemens/ix-react";
 import {
-  iconBulb, iconChevronLeft, iconChevronRight, iconClose, iconCloudUpload, iconError, iconGauge, iconHistory,
+  iconBulb, iconCloudUpload, iconError, iconGauge, iconHistory,
   iconHourglass, iconInfo, iconLightDark, iconMaintenance, iconMonitor, iconPause, iconPcTower, iconPlay, iconPlc,
   iconQuestion, iconRoboticArm, iconSingleCheck, iconSuccess, iconTrend, iconWarning,
 } from "@siemens/ix-icons/icons";
@@ -20,14 +20,11 @@ export const ICON = {
   resume: iconPlay,
   theme: iconLightDark,
   help: iconQuestion,
-  tour: iconBulb,
+  demo: iconBulb,
   todo: iconMaintenance,
   gauge: iconGauge,
   chart: iconTrend,
   history: iconHistory,
-  back: iconChevronLeft,
-  next: iconChevronRight,
-  close: iconClose,
   plc: iconPlc,
   edge: iconPcTower,
   uplink: iconCloudUpload,

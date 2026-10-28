@@ -1,8 +1,7 @@
 // "Nothing moves": records the bounding box of EVERY card and button (all carry data-box) in both views,
 // at desktop and phone width, through the states waiting, OK, attention, alarm, alarm cleared, drift,
 // outage, buffer draining, acknowledged, many alarms and paused, and fails if any element appears,
-// disappears, moves or changes size by more than 2 px. Opening the guided demo must not move anything either,
-// and its panel must not cover a chart. Engineer view on a phone: no text cut off, no sideways scrolling.
+// disappears, moves or changes size by more than 2 px. Engineer view on a phone: no text cut off, no sideways scrolling.
 //
 // The data comes from a private broker (started by e2e/run.sh); this test publishes the same messages the edge app would,
 // including alarm_state (the edge app owns latch, acknowledge and cool-down) and its answer to the Acknowledge command.
@@ -109,10 +108,9 @@ async function cutOff(page: Page): Promise<string[]> {
   });
 }
 
-const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
-/** Differences vs. the baseline: missing, extra (unless allowed) or moved / resized elements. */
-function compare(base: Record<string, Box>, now: Record<string, Box>, allowExtra = false): string[] {
+/** Differences vs. the baseline: missing, extra or moved / resized elements. */
+function compare(base: Record<string, Box>, now: Record<string, Box>): string[] {
   const problems: string[] = [];
   for (const [k, b] of Object.entries(base)) {
     const n = now[k];
@@ -122,7 +120,7 @@ function compare(base: Record<string, Box>, now: Record<string, Box>, allowExtra
       problems.push(`${k}: moved/resized by ${d.toFixed(1)} px (${fmt(b)} -> ${fmt(n)})`);
     }
   }
-  if (!allowExtra) for (const k of Object.keys(now)) if (!(k in base)) problems.push(`${k}: appeared`);
+  for (const k of Object.keys(now)) if (!(k in base)) problems.push(`${k}: appeared`);
   return problems;
 }
 const fmt = (b: Box) => `${b.x.toFixed(0)},${b.y.toFixed(0)} ${b.w.toFixed(0)}x${b.h.toFixed(0)}`;
@@ -174,16 +172,12 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         const base = await boxes(page);
         // expect: a text that proves the state really reached the screen (else "stable" would mean nothing).
         const strictText = mode === "engineer" && viewport.name === "phone";
-        const check = async (state: string, expectText?: string, allowExtra = false) => {
+        const check = async (state: string, expectText?: string) => {
           await page.waitForTimeout(TICK_WAIT_MS);
           if (expectText) await expect(page.locator("main")).toContainText(new RegExp(expectText.replace(/[()]/g, "\\$&"), "i"));
           const now = await boxes(page);
-          const problems = compare(base, now, allowExtra);
+          const problems = compare(base, now);
           if (strictText) problems.push(...await cutOff(page));
-          const tour = now["tour-panel"];
-          if (tour) {
-            for (const [k, b] of Object.entries(now)) if (k.startsWith("chart-") && overlaps(tour, b)) problems.push(`tour-panel covers ${k}`);
-          }
           results.push({ state, problems });
           // Diagnostic picture (not compared). Grow the viewport instead of fullPage: fullPage's own resize
           // makes the charts redraw during the capture and they can come out blank.
@@ -239,12 +233,6 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await check("paused");
         await page.locator('[data-box="pause"]').click();
         await check("resumed");
-        if (mode === "operator") {
-          await page.locator('[data-box="tour"]').click();
-          await check("guided demo open", undefined, true);
-          await page.locator('[data-box="tour-next"]').click();
-          await check("guided demo step 2", undefined, true);
-        }
 
         const failed = results.filter((r) => r.problems.length);
         for (const r of results) console.log(`  ${mode}/${viewport.name} ${r.state}: ${r.problems.length ? "MOVED" : "stable"}`);

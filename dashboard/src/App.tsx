@@ -2,7 +2,6 @@
 //   Operator view (default): traffic light + one sentence, what to do and why, risk gauge,
 //     risk and tool-wear charts, alarm history as sentences. Readable in 5 seconds.
 //   Engineer view: data-flow strip, latency, buffer, drift numbers, all signal charts, demo controls, robot cell (ROS 2).
-// "Guided demo" opens a 4-step tour that lies over the "Recent alarms" card (never over the charts).
 //
 // Stable layout (docs/decisions.md D-27): every card and button has a fixed place and size in both views.
 // A state change only changes text and colour inside an element; nothing appears, disappears or moves.
@@ -13,7 +12,6 @@ import { ActionCard, DataQuality, RobotCell, StatusCard } from "./components/Car
 import { Charts, OperatorCharts } from "./components/Charts";
 import { DemoControls } from "./components/DemoControls";
 import { FlowStrip } from "./components/FlowStrip";
-import { GuidedDemo } from "./components/GuidedDemo";
 import { connectionState, Header, type Mode } from "./components/Header";
 import { AlarmStory, RiskGauge, StatusHero, WhatToDo } from "./components/Operator";
 import { toggleTheme } from "./theme";
@@ -34,7 +32,6 @@ export default function App() {
   const { screen, paused, togglePause, send, ack } = useEdgeGuard();
   const { view, status, statusAt, robot, connection, received, duplicates, now } = screen;
   const [mode, setModeState] = useState<Mode>(loadMode);
-  const [tour, setTour] = useState(false);
   const heartbeatFresh = statusAt != null && now - statusAt < HEARTBEAT_TIMEOUT_MS;
   const edgeRunning = connection === "connected" && heartbeatFresh && status?.state === "running";
 
@@ -42,13 +39,12 @@ export default function App() {
     setModeState(m);
     try { localStorage.setItem("edgeguard.view", m); } catch { /* storage blocked: keep it in memory */ }
   };
-  const startTour = () => { setMode("operator"); setTour(true); };
 
   return (
     <div className="page">
       <Header conn={connectionState(connection, edgeRunning, status, paused)} model={status?.model_version ?? null}
               mode={mode} setMode={setMode} paused={paused} onPause={togglePause}
-              tourOpen={tour} onTour={startTour} onTheme={toggleTheme} />
+              onTheme={toggleTheme} />
 
       <main className="content">
         {mode === "operator" ? (
@@ -57,10 +53,7 @@ export default function App() {
             <WhatToDo view={view} live={edgeRunning} />
             <RiskGauge risk={edgeRunning ? view.latest?.risk ?? null : null} threshold={status?.threshold} costRatio={status?.cost_ratio} />
             <OperatorCharts points={view.points} threshold={status?.threshold} costRatio={status?.cost_ratio} />
-            <div className="history-slot">
-              <AlarmStory alarms={view.alarms} total={view.alarmTotal} now={now} />
-              {tour && <GuidedDemo view={view} status={status} enabled={edgeRunning} send={send} onClose={() => setTour(false)} />}
-            </div>
+            <AlarmStory alarms={view.alarms} total={view.alarmTotal} now={now} />
           </div>
         ) : (
           <div className="grid eng">

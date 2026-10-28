@@ -1,6 +1,6 @@
 """2-minute scripted demo for a screen recording (M6). Needs the stack running (`make demo` starts it).
 
-Drives the same demo commands as the dashboard's guided demo (edge_app/commands.py) over MQTT and
+Drives the same demo commands as the dashboard's demo controls (edge_app/commands.py) over MQTT and
 prints a short caption per step plus live lines from the telemetry, so the console tells the story
 next to the dashboard (http://localhost:8080):
   1. normal operation          1 reading/s, risk low
@@ -24,7 +24,7 @@ TOPIC_TELEMETRY = "edgeguard/machine1/telemetry"
 TOPIC_STATUS = "edgeguard/machine1/status"
 TOPIC_CMD = "edgeguard/machine1/cmd"
 
-NORMAL_MS, FAST_MS, BRISK_MS = 1000, 100, 200  # same speeds as the dashboard's guided demo
+NORMAL_MS, FAST_MS, BRISK_MS = 1000, 100, 200  # same speeds as the dashboard's demo controls
 OUTAGE_S = 20
 PAUSE_S = 4  # after each caption: time to read it on the recording before things change
 

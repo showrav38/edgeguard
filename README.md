@@ -1,271 +1,158 @@
-# EdgeGuard — from alarm to action
+# EdgeGuard
 
-Predictive maintenance at the edge: live PLC signals over OPC UA → ONNX failure-risk and
-failure-type models → an action the technician can act on, with explanation, cost-based alarm
-threshold, drift warning and store-and-forward MQTT. Runs as one `docker compose` stack.
+**Predictive maintenance at the edge: from machine data to an action the technician can trust.**
+
+EdgeGuard runs next to a machine, reads its live signals from the PLC over OPC UA, predicts failures with an ONNX model,
+and sends the result back to the PLC, to an operator dashboard and to a robot cell (ROS 2). Everything starts with one
+command in Docker.
 
 ![Operator view](docs/dashboard_operator.png)
 
-## Why this project (ME)
-_TODO (ME): write in my own words._
+## Why I built this
 
-## The problem
-A maintenance technician does not need "failure probability 0.73". They need to know: is this machine going
-to fail, **why**, and **what should I do now**? Machine data often stays in the PLC, failures are noticed when
-the machine stops, and models stay in notebooks. Even a deployed model has three real-world problems:
-1. **Alarms nobody trusts:** too many false alarms, or no explanation, so operators ignore them.
-2. **Silent failure of the model** when the machine runs outside the conditions it was trained on.
-3. **An unreliable network** to plant IT: data must not be lost when the link is down.
+At the AI & Robotics Hackathon 2026 in Munich I worked on the camera side of an industrial vision challenge: capturing
+and preparing images. What I did not touch was the other end: how an AI result actually reaches the machine, and what
+happens when the network drops or the model sees data it was never trained on. EdgeGuard is my attempt to build that
+part end to end and to measure every step.
 
-## The solution
-EdgeGuard runs next to the machine and, for every PLC cycle:
-1. reads the live signals from the PLC over **OPC UA** (simulated PLC here),
-2. predicts the **failure risk** and the most likely **failure type** (tool wear, heat dissipation, power,
-   overstrain) with two **ONNX** models,
-3. turns that into an **action** ("Tool wear 209 min: replace the tool before the next batch.") plus the
-   **2 signals that pushed the risk most** (occlusion with the training median),
-4. alarms at a **cost-based threshold**: a missed failure costs 20 × a false alarm (configurable),
-5. warns when live data **drifts** away from the training data ("prediction may be unreliable"),
-6. **stores and forwards** telemetry through a local SQLite outbox when the MQTT uplink is down (in order, 0 lost),
-7. writes risk, alarm, type, action code and drift flag **back to the PLC**, publishes everything over
-   **MQTT**, and shows a live **dashboard** with an Operator and an Engineer view.
+## What it does
 
-The edge app is the **single source of truth for alarm state**: latch, acknowledge, cool-down and grouping live in
-one state machine (`edge_app/alarms.py`, D-32), published retained on `edgeguard/machine1/alarm_state` and written
-to the PLC (`AlarmLatched`, `AlarmAcknowledged`), so every dashboard and the robot cell show the same.
+1. **Reads the machine.** Live signals (temperatures, speed, torque, tool wear) from a PLC over OPC UA.
+2. **Predicts.** An ONNX model gives the failure risk and the most likely failure type.
+3. **Tells the technician what to do.** "Tool used 209 min, normal limit about 200 min: replace the tool before the
+   next batch." The reason always matches the failure type.
+4. **Alarms by cost, not by habit.** A missed failure is set to cost 20 times a false alarm, and the alarm threshold
+   is chosen on validation data to minimise that cost.
+5. **Knows when not to trust itself.** A drift monitor warns when live data moves away from the training data.
+6. **Loses no data.** If the MQTT link is down, readings are buffered locally (SQLite) and sent later in order.
+7. **One alarm state for everyone.** Latch, acknowledge and cool-down live in the edge app. The PLC, every dashboard
+   and the robot cell follow the same state.
+8. **Stops the robot cell.** A ROS 2 node stops a simulated robot while an alarm waits for acknowledgement.
 
-## Architecture
-```mermaid
-flowchart LR
-    subgraph plc["plc_sim (container)"]
-        P["Simulated PLC<br/>OPC UA server<br/>replays test rows in time order"]
-    end
-    subgraph edge["edge_app (container)"]
-        C["OPC UA client<br/>subscribe Seq, read row"] --> M["ONNX models<br/>risk + failure type"]
-        M --> X["Explanation<br/>occlusion, top 2"]
-        X --> A["Action + state<br/>OK / WARNING / ALARM"]
-        C --> D["Drift monitor<br/>rolling z-score"]
-        A --> W["Write-back"]
-        A --> B[("SQLite outbox<br/>store-and-forward")]
-        D --> B
-    end
-    subgraph broker["mosquitto (container)"]
-        Q["MQTT broker<br/>1883 + websockets 9001"]
-    end
-    subgraph ui["dashboard (container, nginx :8080)"]
-        U["React dashboard<br/>Operator / Engineer view"]
-    end
-    P -- "signals (OPC UA)" --> C
-    W -- "FailureRisk, Alarm, FailureType, ActionCode,<br/>DriftWarning, AlarmLatched, AlarmAcknowledged (OPC UA)" --> P
-    B -- "telemetry QoS 1, in order" --> Q
-    edge -- "status heartbeat, alarm_state (retained)" --> Q
-    Q -- "MQTT over websockets" --> U
-    U -- "Acknowledge, demo commands<br/>edgeguard/machine1/cmd" --> Q
-    Q -- "commands (validated)" --> edge
-    M -.- F["models/ (mounted read-only)<br/>risk.onnx, failure_type.onnx,<br/>model_info.json"]
-```
-
-Start order in `docker compose`, each step waits for the previous healthcheck:
-**mosquitto** (answers a subscribe) → **plc_sim** (OPC UA port open) → **edge_app** (fresh "running" heartbeat
-with the PLC connected, `edge_app/healthcheck.py`) → **ros2** (robot_sim receives the interlock from cell_guard,
-`ros2/healthcheck.sh`) and **dashboard** (nginx serves the page).
-
-| Operator view | Engineer view | Guided demo |
-|---|---|---|
-| ![Operator](docs/dashboard_operator.png) | ![Engineer](docs/dashboard_engineer.png) | ![Tour](docs/dashboard_tour.png) |
-
-| Operator, light theme | Phone, dark | Phone, light |
-|---|---|---|
-| ![Operator light](docs/dashboard_operator_light.png) | ![Phone dark](docs/dashboard_operator_phone_dark.png) | ![Phone light](docs/dashboard_operator_phone_light.png) |
-
-The dashboard is built with [Siemens iX](https://github.com/siemens/ix) (open-source design system, MIT), open "classic"
-theme (dark default, light). It is not a Siemens product and uses no Siemens brand theme or logo. Its layout never moves:
-every card and button keeps its place and size in every state (docs/decisions.md D-27), checked in a headless browser.
-
-## ROS 2 integration
-A simulated robot loads parts into Machine 1. When EdgeGuard raises an alarm, the robot must stop until a person
-has checked the machine. This runs in a ROS 2 Jazzy container (`ros2/edgeguard_ros`, decision D-31).
-
-The ROS 2 words, in plain terms:
-- **Node:** one small program with one job. Here there are two: `cell_guard` and `robot_sim`.
-- **Topic:** a named channel, like `/robot_cell/stop`. Nodes do not call each other; they talk through topics.
-- **Message:** the typed data sent on a topic. `std_msgs/Bool` is just true or false; `std_msgs/String` is a text.
-- **Publisher / subscriber:** a node that sends on a topic / a node that receives from it. A topic can have
-  any number of each, and ROS 2 finds them automatically (discovery), so `ros2 topic echo` can listen in too.
-- **Interlock:** a rule that blocks a machine from running while a condition is unsafe. Here: the robot cell
-  stops while an alarm is active and not acknowledged, and stays stopped after the readings return to normal
-  until someone presses Acknowledge (a latch, like a reset button on a real machine).
+## How it works
 
 ```mermaid
 flowchart LR
-    D["Dashboard<br/>Acknowledge button"] -- "MQTT edgeguard/machine1/cmd" --> E
-    E["edge_app<br/>alarm state machine"] -- "MQTT edgeguard/machine1/alarm_state<br/>(retained)" --> G
-    subgraph ros["ros2 container (ROS 2 Jazzy)"]
-        G["cell_guard node"] -- "/machine1/alarm<br/>std_msgs/Bool" --> Z["any subscriber<br/>e.g. ros2 topic echo"]
-        G -- "/robot_cell/stop<br/>std_msgs/Bool (interlock)" --> R["robot_sim node"]
-        R -- "/robot_cell/state<br/>std_msgs/String" --> Z
-    end
-    R -- "MQTT edgeguard/robot_cell/status<br/>running / stopped, parts" --> D
+    PLC["PLC (simulated)<br/>OPC UA server"] -- "machine signals" --> EDGE
+    EDGE["Edge app<br/>ONNX model, explanation,<br/>drift check, alarm state,<br/>local buffer"] -- "risk, alarm, action" --> PLC
+    EDGE -- "MQTT" --> BROKER["MQTT broker"]
+    BROKER --> UI["Dashboard<br/>Operator / Engineer view"]
+    UI -- "Acknowledge" --> BROKER
+    BROKER --> ROS["ROS 2<br/>cell_guard → robot_sim"]
 ```
 
-- **cell_guard** is the bridge: it subscribes to the edge app's `alarm_state` over MQTT and publishes
-  `/machine1/alarm` (an alarm is active now) and `/robot_cell/stop` (the interlock: latched and not acknowledged)
-  5 times a second. It decides nothing itself, so the robot respects the cool-down (a repeat of an acknowledged
-  failure type within 60 s does not stop it again; a different type does). The rule is in `interlock.py`, plain
-  Python with unit tests (`tests/test_interlock.py`).
-- **robot_sim** subscribes to `/robot_cell/stop`. State "running" (loads one part every 2 s) or "stopped by
-  EdgeGuard". If the stop messages stop coming (cell_guard or ROS down), it stops too: no interlock signal, no motion.
-  It reports its state over MQTT for the Engineer view's "Robot cell" card.
-- Try it: `docker compose exec ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic echo /robot_cell/stop"`.
-  `make check-m7b` triggers an alarm, checks with `ros2 topic echo` that the robot stops, acknowledges, and checks
-  that it runs again.
+Five containers start in order, each waiting for the previous one to be healthy:
+MQTT broker → PLC simulator → edge app → ROS 2 nodes and dashboard.
+
+![Engineer view](docs/dashboard_engineer.png)
+
+*Engineer view: data flow with latency, buffer, drift, alarm rate and the robot cell. The dashboard also works in a light theme and on a phone.*
+
+The dashboard uses [Siemens iX](https://github.com/siemens/ix), the open-source design system (MIT), in its open
+"classic" theme. This project is not a Siemens product. The layout never moves: a browser test fails if any card
+or button shifts by more than 2 px in any state.
+
+## ROS 2 robot cell
+
+A simulated robot loads parts into the machine. While an alarm is active and not yet acknowledged, it must stop.
+
+- **cell_guard** (node) reads the alarm state and publishes `/robot_cell/stop` (true or false) on a topic.
+- **robot_sim** (node) subscribes to that topic: it stops on true and loads parts again after Acknowledge.
+- **Fail-safe:** if robot_sim hears nothing for 2 s, it stops by itself.
+
+The two nodes never call each other; they only share the topic. Watch it live:
+`docker compose exec ros2 bash -c "source /opt/ros/jazzy/setup.bash && ros2 topic echo /robot_cell/stop"`
 
 ## Results
-Time-based split by UDI (train = past, test = future; see docs/decisions.md D-20). Test set: UDI 8001–10000,
-2,000 readings, 39 failures. The earlier random split is shown for comparison only (different test rows).
 
-| Risk model (test set) | Time split, cost threshold 0.16 | Time split, default 0.50 | Old random split, cost threshold 0.22 |
-|---|---|---|---|
-| ROC-AUC | 0.955 | 0.955 | 0.976 |
-| Recall (failures caught) | 0.85 (33/39) | 0.69 (27/39) | 0.88 (60/68) |
-| Precision | 0.21 | 0.38 | 0.31 |
-| F1 | 0.33 | 0.49 | 0.46 |
-| False alarms / missed | 128 / 6 | 44 / 12 | 135 / 8 |
+Trained on the past, tested on the future (time-based split): train on the oldest 60 % of readings, choose the
+threshold on the next 20 %, test on the newest 20 % (2,000 readings, 39 failures).
 
-| System result | Value | Where it comes from |
-|---|---|---|
-| Cost-based threshold | **0.16** (validation cost 252 vs 444 at 0.50; missed = 20 × false alarm) | `training/choose_threshold.py`, [cost curve](docs/cost_curve.png) |
-| Failure-type model | accuracy 0.89 on 37 test failures (small n) | `training/evaluate.py` |
-| ONNX inference, 1 row | mean 0.07 ms, p95 0.09 ms (1,000 rows) | `make check-m1` |
-| End-to-end latency PLC → edge → PLC | mean ~12 ms, p95 ~17 ms (100 ms cycle, 500 readings, 0 missed cycles) | `make check-m3` |
-| Live precision / recall (replay) | 0.18 / 0.90 (500 readings, 10 failures) | `make check-m3` |
-| Drift: false warnings on normal data | 0 % (train + validation windows, and the unseen test replay) | `training/calibrate_drift.py`, D-21 |
-| Drift: detection delay (DriftMode on) | median 30, p95 36 readings; 100 % detected | D-21 |
-| Uplink outage, real broker stop 20 s | 220 buffered, **0 lost, in order** | `make check-m4` |
-| Uplink outage, simulated 20 s (demo) | 100 buffered, **0 lost, in order** | `make demo` |
-| Full stack | 4 services healthy, telemetry on MQTT | `make check-m6` |
+| Model (test set) | Value |
+|---|---|
+| ROC-AUC | 0.955 |
+| Failures caught (recall) at the cost-based threshold 0.16 | 0.85 (33 of 39) |
+| Precision at that threshold | 0.21 (many false alarms, see Limits) |
+| Failure type correct | 0.89 |
 
-- **Recall by type (time split):** TWF 0.60 (n=10), PWF 1.00 (n=10), OSF 0.95 (n=21). HDF and RNF do not occur in
-  the test period (all heat-dissipation failures happen in UDI 2001–8000). **RNF (random failures) is not
-  predictable by definition.**
-- **What the technician sees:** in the time-ordered replay, 104 alarm episodes in 2,000 readings, mean 1.6 readings
-  long. Most AI4I failures are single-reading events, so the dashboard latches alarms until acknowledged.
-- **Rules check:** the labels come from published rules; `docs/rules_check.png` compares them with the model (D-07).
+| System | Value |
+|---|---|
+| End-to-end, PLC → edge app → back to PLC | mean ~12 ms, p95 ~17 ms, 0 missed cycles |
+| Model inference per reading | < 0.1 ms on CPU |
+| Network outage of 20 s | all buffered readings delivered, 0 lost, in order |
+| Drift monitor | 0 % false warnings on normal data, real drift found after ~30 readings |
+| Robot interlock | stops on alarm, resumes after Acknowledge, stops on lost signal |
 
-## How to run
-Needs Docker (with compose) and, for training and the demo/check scripts, Python 3.11 in `.venv` (`make venv`, needs `uv`).
+The numbers come from the training scripts and from check scripts that print PASS or FAIL (`make check-m1` … `make check-m7b`).
+
+## Run it
+
+Needs Docker, Python 3.11 (via `uv`) and the dataset (see Data).
 
 ```bash
-make venv            # once: .venv with Python 3.11
-# put the dataset at data/ai4i2020.csv (not in git), then:
-make train           # models/*.onnx + model_info.json, data/{train,val,test}.csv
-make up              # build + start the stack, wait until all 5 services are healthy
-                     # dashboard: http://localhost:8080
-make demo            # starts the stack (if needed) and runs the 2-minute scripted demo
-make down            # stop everything
+make venv     # once
+make train    # trains the models and writes the data splits
+make up       # starts all 5 containers, dashboard on http://localhost:8080
+make demo     # optional: a scripted 2 minute demo (alarm, drift, network outage)
+make down     # stops everything
+make test     # unit tests
 ```
 
-**One command after training:** `make demo` (or `docker compose up -d --build --wait` for the stack alone).
-The scripted demo prints a caption per step while it drives the same demo commands as the dashboard's
-guided tour: (1) normal operation, (2) 10× replay until a tool-wear alarm with action and top-2 factors,
-(3) drift mode until the drift warning, (4) a 20 s simulated uplink outage with buffered / lost / in-order counts.
-Open the dashboard next to the console to screen-record it.
+<details>
+<summary>Configuration (environment variables)</summary>
 
-Checks (each prints PASS or FAIL): `make check-m0` … `make check-m6`, `make check-m7b` (ROS 2 robot cell),
-unit tests `make test`.
-Dashboard: `cd dashboard && npm test` (unit tests) and `npm run test:e2e` (layout test: records the box of every card and
-button in both views, at desktop and phone width, through OK / attention / alarm / drift / outage / acknowledged / paused,
-and fails if anything moves or resizes by more than 2 px; runs in the Playwright Docker image with a private broker).
-`SHOTS=1 e2e/run.sh` (stack running) regenerates the screenshots in docs/.
-`check-m3`…`check-m5` start their own PLC and edge app on the host, so run `make down` first (same ports).
+| Variable | Default | Meaning |
+|---|---|---|
+| `PLC_CYCLE_MS` | `1000` | one replayed reading per second |
+| `COST_MISSED_FAILURE` / `COST_FALSE_ALARM` | `20` / `1` | costs used to choose the alarm threshold |
+| `ACK_COOLDOWN_S` | `60` | after Acknowledge, the same failure type does not latch again for this long |
+| `DRIFT_WINDOW` | `50` | readings in the drift window |
+| `DRIFT_ON` / `DRIFT_OFF` | from `model_info.json` | drift warning thresholds, calibrated on training and validation data |
+| `BUFFER_MAX_ROWS` | `100000` | local buffer size (about 28 h at one reading per second) |
+| `DEMO_COMMANDS` | `1` | `0` disables the demo controls (Acknowledge still works) |
+| `OPCUA_URL`, `MQTT_HOST`, `MQTT_PORT` | local defaults | connections |
 
-### Configuration (environment variables, defaults)
-In compose, `PLC_CYCLE_MS` and `DEMO_COMMANDS` can be overridden from the shell or a `.env` file; the containers
-set `OPCUA_URL`, `MQTT_HOST`, `MODELS_DIR` (`/app/models`, mounted read-only) and `BUFFER_PATH` (named volume).
+</details>
 
-| Variable | Default | Used by | Meaning |
-|---|---|---|---|
-| `PLC_CYCLE_MS` | `1000` | plc_sim | one replayed test row (UDI order) per second; the check scripts run faster (100 ms) |
-| `OPCUA_ENDPOINT` | `opc.tcp://0.0.0.0:4840/edgeguard/` | plc_sim | OPC UA server endpoint |
-| `PLC_DATA` | `./data/test.csv` | plc_sim | rows to replay (compose mounts `./data/test.csv` read-only) |
-| `DRIFT_TEMP_K` / `DRIFT_SPEED_RPM` | `8` / `300` | plc_sim | signal shift when `DriftMode` is on |
-| `COST_MISSED_FAILURE` / `COST_FALSE_ALARM` | `20` / `1` | training | costs used to choose the alarm threshold |
-| `PLC_LATENCY_LOG` | (off) | plc_sim | CSV of end-to-end latency per Seq |
-| `OPCUA_URL` | `opc.tcp://localhost:4840/edgeguard/` | edge_app | PLC to connect to |
-| `OPCUA_PUBLISH_MS` | `10` | edge_app | OPC UA subscription publishing interval |
-| `MQTT_HOST` / `MQTT_PORT` | `localhost` / `1883` | edge_app | MQTT broker |
-| `WARNING_FRACTION` | `0.5` | edge_app | WARNING when risk >= 0.5 x alarm threshold |
-| `MODELS_DIR` | `./models` | edge_app | ONNX models + model_info.json |
-| `DRIFT_WINDOW` | `50` | edge_app | readings in the rolling drift window |
-| `DRIFT_ON` / `DRIFT_OFF` | from `model_info.json` (2.35 / 1.88) | edge_app | drift warning on / off (window-mean shift, in training std); chosen on UDI 1–8000 by `training/calibrate_drift.py` |
-| `DRIFT_SIGNALS` | `AirTempK,ProcessTempK,SpeedRpm,TorqueNm` | edge_app | signals watched for drift |
-| `BUFFER_PATH` | `./data/outbox.db` | edge_app | SQLite store-and-forward buffer |
-| `BUFFER_MAX_ROWS` | `100000` | edge_app | buffer limit (~28 h at 1 reading/s); oldest dropped when full, count reported |
-| `MQTT_CLIENT_ID` | `edgeguard-edge` | edge_app | must be unique per broker |
-| `STATUS_INTERVAL_S` | `1.0` | edge_app | status heartbeat interval (PLC / edge / uplink health) |
-| `DEMO_COMMANDS` | `1` | edge_app | `0` = ignore demo commands on `edgeguard/machine1/cmd` (Acknowledge still works) |
-| `ROBOT_PART_EVERY_S` | `2` | ros2 (robot_sim) | one part loaded every N seconds while running |
-| `VITE_MQTT_URL` | `ws://<page host>:9001` | dashboard | MQTT websocket URL (set at build time) |
-| `ACK_COOLDOWN_S` | `60` | edge_app | after Acknowledge, repeats of the same failure type are listed and counted but do not latch the alarm (or stop the robot) again for this long |
+## Limits
 
-## Honest limits
-- **Too many alarms (alarm flood).** The cost-based threshold (0.16; a missed failure = 20 × a false alarm) fires
-  early by design. On the 2000-row replay at 1x that is 161 ALARM readings, about **one every 12 s**, and **80 %
-  of them false** (104 alarm events = 187 per hour, 87 % false). ISA-18.2 / EEMUA 191 call more than 10 alarms in
-  10 min per operator an alarm flood and aim for about 6 per hour. The edge app's alarm state machine limits the
-  damage: after Acknowledge, the same failure type does not latch again for 60 s, repeats are grouped ("Power
-  problem: N alarms in the last X min"), every alarm stays in the history and counters, and the Engineer view shows
-  the alarm rate. Robot stops on the replay (`scripts/robot_stops.py`, operator acknowledges after 10 s): 18.3 per
-  10 min before the cool-down applied to the robot, 12.3 after (30 s: 11.7 → 8.1); the rest are alarms of other
-  failure types, which the cool-down must not hide. That treats the symptom. The real fix is a better model: model v2 in M7 with power, temperature difference and
-  tool wear × torque as features, which match how the failures are defined (see Next steps).
-- **Semi-synthetic data.** AI4I 2020 labels were generated by simple published rules, not recorded on a real
-  machine. On this data the rules alone (HDF/PWF/OSF) reach precision 1.00 (recall 0.72 vs the model's 0.85), so
-  the results show the pipeline works, not how well the model would do on real machine data. RNF is random by
-  definition, and the test period contains no HDF failures.
-- **Simulated PLC.** The "PLC" is an asyncua OPC UA server replaying CSV rows; a real controller would offer a
-  consistent data block or structure, other cycle times and real jitter.
-- **Not a real Siemens Industrial Edge device.** This is a plain `docker compose` stack on Ubuntu (WSL2): no device
-  management, no app store packaging, no hardware limits tested.
-- **No security.** OPC UA runs with `NoSecurity`, the MQTT broker allows anonymous access without TLS, and the demo
-  command topic is open to anyone on the network (`DEMO_COMMANDS=0` turns it off). A plant needs certificates,
-  user login and broker ACLs.
-- **Explanations are simple.** Occlusion with the training median: one signal at a time, misses interactions, and
-  the model has no power feature, so a power failure is explained by torque and temperature (D-11).
-- **Drift detection** looks at window means per signal only; a shift smaller than ~2.35 std is not flagged.
-- **Simulated outage in the demo.** `make demo` cuts the uplink inside the edge app (same buffering code path);
-  the real broker stop is tested in `make check-m4`.
-- **Alarm state lives in the edge app's memory.** A restart of the edge app forgets latched alarms and cool-downs
-  (it starts NORMAL); a real system would keep them in the PLC or on disk. The broker is open, so anyone on the
-  network can send an Acknowledge.
-- **The robot interlock is not a safety function.** It runs over MQTT and ROS 2 without safety-rated hardware or
-  protocols (a real cell would use a safety PLC and e.g. PROFIsafe); it shows the logic, not certified protection.
-  Since D-32 it follows the edge app's cool-down; with v1's alarm flood it still stops about 12 times per 10 min.
+- **Too many alarms.** The low threshold catches most failures but gives about one alarm every 12 s on the replay,
+  most of them false. Real plants aim for a few alarms per hour (ISA-18.2). Cool-down and grouping reduce the noise;
+  the real fix is a better model (see Next steps).
+- **The replay is compressed.** One reading stands for one production cycle and is replayed every second, so months
+  of machine life pass in minutes. A real machine fails far less often.
+- **Semi-synthetic data.** The AI4I 2020 failure labels were generated from simple rules. The results show that the
+  pipeline works, not how the model would do on real machine data.
+- **Simulated PLC.** A Python OPC UA server replays the data. A real controller has other cycle times and jitter.
+- **Not a real Industrial Edge device.** A plain Docker Compose stack: no device management or app packaging.
+- **No security.** OPC UA and MQTT run without certificates, login or encryption. A plant needs all three.
+- **Not a safety function.** The robot interlock shows the logic only. Real robot safety needs a safety PLC.
+- **Alarm state is kept in memory.** A restart of the edge app forgets latched alarms.
 
-## What I learned (ME)
-_TODO (ME): write in my own words._
+## What I learned
+
+- **A random split hid how hard the problem is.** Switching to a time-based split lowered every score, but the new
+  numbers are the honest ones.
+- **A good threshold on paper can flood the operator.** Choosing it by cost caught 85 % of failures, and the dashboard
+  showed what that means in practice: alarms every few seconds. Alarm handling is as important as the model.
+- **The explanation found a weakness in the model.** For a real power failure it blamed temperature, because the model
+  has no power feature. Showing the reason made the problem visible.
+- **Calibrate on the right data.** My first drift threshold, set on one calm period, would have warned 23 % of the
+  time in the hot season. Calibrating over both seasons brought it to 0 %.
+- **Keep one source of truth.** With the alarm logic in the browser, two screens disagreed and the robot ignored the
+  cool-down. Moving it into the edge app fixed both.
 
 ## Next steps
-- **M7 (a): model hot-swap over MQTT with validation and rollback.** Deploy a model v2 with **engineered features**
-  (power = torque × speed × 2π/60, temperature difference, tool wear × torque). The rules check
-  (`docs/rules_check.png`) shows where raw signals hurt: missed power failures sit just above the 9,000 W limit,
-  missed overstrain failures just above the tool wear × torque limit; a tree on raw torque and speed can only
-  approximate a product with many small steps. Goal: the explanation for seq 1614 (a real power failure, 9.01 kW,
-  D-11) moves from TorqueNm + ProcessTempK to power. Cost: 3 extra inputs computed in the edge app, and explanations
-  partly name derived values (see D-03, D-07). This is also the real fix for the alarm flood (see Honest limits,
-  D-28): v2 should separate the many near-limit false alarms (e.g. 8.6 kW) from real failures; measure the alarm
-  rate and false share on the replay before and after the swap.
-- **Security:** OPC UA with certificates (Basic256Sha256), MQTT with TLS, users and ACLs.
-- **Real machine data**, and retraining when drift persists.
+
+- **Model v2 with physics features** (power = torque × speed, temperature difference, tool wear × torque), deployed
+  while the app keeps running, with automatic rollback. Goal: far fewer false alarms.
+- **Security:** OPC UA certificates, MQTT with TLS and user accounts.
+- **Several machines** on one edge device, and real machine data.
 
 ## Data
-UCI "AI4I 2020 Predictive Maintenance Dataset" (CC BY 4.0). Not committed — place it at
-`data/ai4i2020.csv`. `make train` writes the split files to `data/`; the stack mounts `data/test.csv` and
-`models/` read-only, nothing from `data/` is baked into an image (`.dockerignore`).
 
-**The dataset is semi-synthetic.** The failure labels were generated by simple published rules
-(tool wear window 200–240 min, temperature difference + low speed, power range, tool wear ×
-torque), not recorded from a real machine. `training/rules_check.py` compares the learned model
-with these rules (`docs/rules_check.png`).
+UCI "AI4I 2020 Predictive Maintenance Dataset" (CC BY 4.0). It is not in this repository: download it and place it
+at `data/ai4i2020.csv`. `training/rules_check.py` compares the model with the rules that generated the labels
+([plot](docs/rules_check.png)).
 
-UI built with Siemens iX (open source, MIT license).
+Design decisions and their trade-offs are logged in [docs/decisions.md](docs/decisions.md).

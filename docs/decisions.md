@@ -344,3 +344,9 @@ Draft entries are written by Claude; I review and rewrite them in my own words.
   ~100 lines of plain Python with a test per transition. This revises D-31's "no cool-down for the robot": the
   cool-down only stops re-latching the type a person has just checked; a new type still stops the robot.
   Limits: state is in memory (an edge app restart forgets it); the open broker lets anyone acknowledge.
+
+### D-33 — Guided demo removed from the dashboard
+- **Decision:** the header "Guided demo" button and its 4-step tour panel are gone; the Engineer view's demo
+  controls and `make demo` (scripted, with live checks) stay.
+- **Alternatives:** keep both (two ways to drive the same commands, one more panel the layout test must guard).
+- **Why:** `make demo` already tells the story for a recording, the demo controls cover live use; less UI to explain.

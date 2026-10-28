@@ -1,4 +1,4 @@
-// Header: app name, machine, connection status, model version, Pause, guided demo, view toggle, theme.
+// Header: app name, machine, connection status, model version, Pause, view toggle, theme.
 // Every control is always present at the same place; only its label or colour changes.
 import { IxButton, IxIconButton, IxToggleButton } from "@siemens/ix-react";
 import type { Status } from "../types";
@@ -20,15 +20,13 @@ export function connectionState(connection: Connection, edgeRunning: boolean, st
   return { tone: "ok", text: "Live" };
 }
 
-export function Header({ conn, model, mode, setMode, paused, onPause, tourOpen, onTour, onTheme }: {
+export function Header({ conn, model, mode, setMode, paused, onPause, onTheme }: {
   conn: { tone: Tone; text: string };
   model: string | null;
   mode: Mode;
   setMode: (m: Mode) => void;
   paused: boolean;
   onPause: () => void;
-  tourOpen: boolean;
-  onTour: () => void;
   onTheme: () => void;
 }) {
   return (
@@ -47,8 +45,6 @@ export function Header({ conn, model, mode, setMode, paused, onPause, tourOpen, 
                     onClick={onPause}>{paused ? "Resume" : "Pause"}</IxButton>
           <Help term="Pause" box="help-pause">{GLOSSARY.pause}</Help>
         </span>
-        <IxButton data-box="tour" className="btn-tour" variant="subtle-secondary" icon={ICON.tour} aria-label="Guided demo"
-                  disabled={tourOpen} onClick={onTour}><span className="btn-label">Guided demo</span></IxButton>
         <div className="view-toggle" role="group" aria-label="View">
           <IxToggleButton data-box="view-operator" variant="subtle-secondary" pressed={mode === "operator"}
                           onClick={() => setMode("operator")}>Operator</IxToggleButton>

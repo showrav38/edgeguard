@@ -1,6 +1,6 @@
 // docs/ screenshots from the REAL stack (docker compose up, dashboard on :8080). Run: SHOTS=1 e2e/run.sh
 // Drives the existing demo commands (replay speed) until the model raises a real alarm, then captures
-// the Operator view (dark, light, phone), the Engineer view and the guided demo.
+// the Operator view (dark, light, phone), and the Engineer view.
 import { expect, test, type Page } from "@playwright/test";
 import mqtt from "mqtt";
 
@@ -49,13 +49,6 @@ test("docs screenshots", async ({ page }) => {
     await page.locator('[data-box="theme"]').click();
     await shot(page, "dashboard_operator_phone_light");
     await page.locator('[data-box="theme"]').click();
-
-    await page.setViewportSize(desktop);
-    await page.locator('[data-box="tour"]').click();
-    await page.locator('[data-box="tour-next"]').click(); // step 2: tool wear alarm (10x until the next alarm)
-    await expect(page.locator('[data-box="tour-panel"]')).toContainText("Alarm raised", { timeout: 90_000 });
-    await shot(page, "dashboard_tour"); // full page: the panel lies over "Recent alarms", the charts stay visible
-    await page.locator('[data-box="tour-close"]').click(); // back to 1x, drift off
   } finally {
     await cmd({ cmd: "speed", cycle_ms: 1000 });
     await client.endAsync();

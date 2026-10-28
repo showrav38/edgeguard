@@ -26,7 +26,7 @@ export function DemoControls({ status, enabled, send }: {
   const last = status?.last_command;
 
   return (
-    <Card box="demo" title="Demo controls (simulated machine)" icon={ICON.tour} className="demo">
+    <Card box="demo" title="Demo controls (simulated machine)" icon={ICON.demo} className="demo">
       <p className="small muted">
         These act on the simulated PLC and simulate an uplink outage inside the edge app. The dashboard
         stays connected so you can watch the buffer fill and drain.
