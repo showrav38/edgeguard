@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeSignal, groupAlarms, groupHeadline, groupSentence, headline, mainReason, typeReason } from "./plain";
+import { describeSignal, groupAlarms, groupHeadline, groupSentence, headline, mainReason, typeReason, robotLine } from "./plain";
 import type { AlarmEvent, LatchedAlarm } from "./stream";
 import type { Telemetry } from "./types";
 
@@ -147,5 +147,20 @@ describe("headline", () => {
 
   it("off when there is no live data", () => {
     expect(headline(reading(), null, false).light).toBe("off");
+  });
+});
+
+describe("robot cell line", () => {
+  const ts = "2026-10-26T10:00:00Z";
+  const at = Date.parse(ts) + 500;
+  it("running with parts, stopped until acknowledge, offline when stale", () => {
+    expect(robotLine({ state: "running", reason: "running", parts: 1234, ts }, at))
+      .toEqual({ tone: "ok", text: "Robot cell: running (1,234 parts)" });
+    expect(robotLine({ state: "stopped", reason: "stopped by EdgeGuard", parts: 5, ts }, at).text)
+      .toBe("Robot cell stopped until you acknowledge");
+    expect(robotLine({ state: "stopped", reason: "stopped: no interlock signal", parts: 5, ts }, at).text)
+      .toBe("Robot cell stopped: no interlock signal");
+    expect(robotLine({ state: "running", reason: "running", parts: 1, ts }, at + 5000).text).toBe("Robot cell: offline");
+    expect(robotLine(null, at).text).toBe("Robot cell: no data");
   });
 });

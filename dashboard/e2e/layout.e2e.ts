@@ -1,7 +1,7 @@
 // "Nothing moves": records the bounding box of EVERY card and button (all carry data-box) in both views,
 // at desktop and phone width, through the states waiting, OK, attention, alarm, alarm cleared, drift,
 // outage, buffer draining, acknowledged, many alarms and paused, and fails if any element appears,
-// disappears, moves or changes size by more than 2 px. Engineer view on a phone: no text cut off, no sideways scrolling.
+// disappears, moves or changes size by more than 2 px. On a phone, in both views: no text cut off, no sideways scrolling.
 //
 // The data comes from a private broker (started by e2e/run.sh); this test publishes the same messages the edge app would,
 // including alarm_state (the edge app owns latch, acknowledge and cool-down) and its answer to the Acknowledge command.
@@ -28,15 +28,18 @@ const robotStatus = () => ({ ...robot, ts: new Date().toISOString() });
 const ROBOT_STOPPED = { state: "stopped", reason: "stopped by EdgeGuard", parts: 1234 };
 const ROBOT_RUNNING = { state: "running", reason: "running", parts: 1234 };
 
-// edgeguard/machine1/alarm_state, shaped like edge_app/alarms.py. Only tool_wear changes in this scenario.
+// edgeguard/machine1/alarm_state, shaped like edge_app/alarms.py. One failure type changes at a time
+// (tool_wear, except in the "longest text" steps at the end).
 const NORMAL_TYPE = { state: "NORMAL", acknowledged: false, start_ts: null as string | null, end_ts: null as string | null,
                       peak: null as object | null, cooldown_until: null as string | null, group: { count: 0, since: null as string | null } };
 let toolWear = { ...NORMAL_TYPE };
+let alarmType = "tool_wear"; // the type `toolWear` stands for
 let counters = { total: 0, false: 0, last_10min: 0, watched_s: 0 };
 const alarmState = () => {
   const latched = toolWear.state === "ACTIVE" || toolWear.state === "WAITING_FOR_ACK";
   return { ts: new Date().toISOString(), latched, acknowledged: latched && toolWear.acknowledged, active: toolWear.state === "ACTIVE",
-           types: { tool_wear: toolWear, heat_dissipation: NORMAL_TYPE, power: NORMAL_TYPE, overstrain: NORMAL_TYPE },
+           types: { tool_wear: NORMAL_TYPE, heat_dissipation: NORMAL_TYPE, power: NORMAL_TYPE, overstrain: NORMAL_TYPE,
+                    [alarmType]: toolWear },
            counters, cooldown_s: 60 };
 };
 
@@ -86,15 +89,16 @@ async function boxes(page: Page): Promise<Record<string, Box>> {
 }
 
 /** Text that does not fit: an element that clips (overflow hidden / ellipsis / line clamp) or scrolls sideways
- *  while its content is wider or taller than its box. Lists that scroll DOWN inside a card are allowed. */
-async function cutOff(page: Page): Promise<string[]> {
-  return page.evaluate(() => {
+ *  while its content is wider or taller than its box. Lists that scroll DOWN inside a card are allowed.
+ *  `root`: where to look (default the whole page content). */
+async function cutOff(page: Page, root = "main"): Promise<string[]> {
+  return page.evaluate((root) => {
     const out: string[] = [];
     const doc = document.documentElement;
     if (doc.scrollWidth > doc.clientWidth + 1) out.push(`page scrolls sideways (${doc.scrollWidth} > ${doc.clientWidth} px)`);
     const name = (el: Element) => `${(el.closest("[data-box]") as HTMLElement | null)?.dataset.box ?? "?"} `
       + `<${el.tagName.toLowerCase()} class="${el.getAttribute("class") ?? ""}"> "${(el.textContent ?? "").trim().slice(0, 40)}"`;
-    for (const el of Array.from(document.querySelectorAll("main *"))) {
+    for (const el of Array.from(document.querySelectorAll(`${root} *`))) {
       if (el.closest("svg, .recharts-wrapper")) continue;
       const cs = getComputedStyle(el);
       if (cs.overflowX !== "visible" && el.scrollWidth > el.clientWidth + 1) {
@@ -105,7 +109,7 @@ async function cutOff(page: Page): Promise<string[]> {
       }
     }
     return out;
-  });
+  }, root);
 }
 
 
@@ -133,6 +137,7 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
       uplink = { ...uplink, state: "up", buffer_backlog: 0, outage_remaining_s: 0 };
       robot = { state: "running", reason: "running", parts: 12 };
       toolWear = { ...NORMAL_TYPE };
+      alarmType = "tool_wear";
       counters = { total: 0, false: 0, last_10min: 0, watched_s: 0 };
       const client = await mqtt.connectAsync("ws://localhost:19001", { clientId: `layout-${mode}-${viewport.name}` });
       // Like the edge app: publish the alarm state (retained) at once when it changes.
@@ -171,7 +176,8 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         const results: { state: string; problems: string[] }[] = [];
         const base = await boxes(page);
         // expect: a text that proves the state really reached the screen (else "stable" would mean nothing).
-        const strictText = mode === "engineer" && viewport.name === "phone";
+        // No text cut off and no sideways scrolling on a phone, in both views (every card).
+        const strictText = viewport.name === "phone";
         const check = async (state: string, expectText?: string) => {
           await page.waitForTimeout(TICK_WAIT_MS);
           if (expectText) await expect(page.locator("main")).toContainText(new RegExp(expectText.replace(/[()]/g, "\\$&"), "i"));
@@ -198,6 +204,7 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await setAlarm({ state: "ACTIVE", start_ts: first.ts, peak: first, group: { count: 1, since: first.ts } }, 1);
         robot = ROBOT_STOPPED;
         await check("alarm", mode === "operator" ? "likely to fail soon" : "ALARM");
+        if (mode === "operator") await expect(page.locator("main")).toContainText("Robot cell stopped until you acknowledge");
         const cleared = reading({ wear: 216 });
         await send(cleared);
         await setAlarm({ state: "WAITING_FOR_ACK", end_ts: cleared.ts });
@@ -218,6 +225,7 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await page.locator(`[data-box="ack-${mode}"]`).click();
         robot = ROBOT_RUNNING;
         await check("alarm acknowledged", "Acknowledged");
+        if (mode === "operator") await expect(page.locator("main")).toContainText("Robot cell: running (1,234 parts)");
         expect(acks.map((a) => a.type)).toEqual(["tool_wear"]); // the dashboard asked the edge app
         // Cool-down: the edge app records and counts the repeats but does not latch them (alarm_suppressed).
         for (let i = 0; i < 10; i++) {
@@ -233,6 +241,16 @@ for (const viewport of [{ name: "desktop", width: 1366, height: 900 }, { name: "
         await check("paused");
         await page.locator('[data-box="pause"]').click();
         await check("resumed");
+        // Longest texts: a latched alarm of every failure type (its reason sentence is the longest text on the
+        // Operator view; heat dissipation's is the longest of all), so cut-off text shows up on a phone.
+        for (const [type, code, wear] of [["heat_dissipation", 2, 120], ["overstrain", 4, 214], ["power", 3, 120]] as const) {
+          const peak = reading({ ...ALARM, type, code, wear, text: "" });
+          await send(peak);
+          alarmType = type;
+          toolWear = { ...NORMAL_TYPE, state: "ACTIVE", start_ts: peak.ts, peak, group: { count: 1, since: peak.ts } };
+          await setAlarm({});
+          await check(`longest text: ${type}`, "likely to fail soon|ALARM");
+        }
 
         const failed = results.filter((r) => r.problems.length);
         for (const r of results) console.log(`  ${mode}/${viewport.name} ${r.state}: ${r.problems.length ? "MOVED" : "stable"}`);

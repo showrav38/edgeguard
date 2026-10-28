@@ -1,7 +1,7 @@
 // Plain-language text for the Operator view: what a technician or a visitor reads in 5 seconds.
 // Pure functions (no React), unit-tested in plain.test.ts.
 import type { AlarmEvent, LatchedAlarm } from "./stream";
-import type { AlarmTypeInfo, Telemetry } from "./types";
+import type { AlarmTypeInfo, RobotStatus, Telemetry } from "./types";
 
 export type Light = "green" | "amber" | "red" | "off";
 
@@ -168,6 +168,23 @@ export function headline(latest: Telemetry | null, latched: LatchedAlarm | null,
              sentence: "Machine 1 runs in unusual conditions, so the prediction is less reliable." };
   }
   return { light: "green", word: "Normal", sentence: "Machine 1 is running normally." };
+}
+
+export const ROBOT_STALE_MS = 3000; // robot_sim publishes every 0.5 s
+
+/** The robot cell line in the Operator status card (edgeguard/robot_cell/status, from the ROS 2 node robot_sim). */
+export function robotLine(robot: RobotStatus | null, nowMs: number): { tone: "ok" | "warn" | "idle"; text: string } {
+  if (!robot) return { tone: "idle", text: "Robot cell: no data" };
+  if (robot.state === "offline" || !robot.ts || nowMs - Date.parse(robot.ts) > ROBOT_STALE_MS) {
+    return { tone: "idle", text: "Robot cell: offline" };
+  }
+  if (robot.state === "running") {
+    const n = robot.parts ?? 0;
+    return { tone: "ok", text: `Robot cell: running (${n.toLocaleString("en-US")} part${n === 1 ? "" : "s"})` };
+  }
+  return robot.reason === "stopped by EdgeGuard"
+    ? { tone: "warn", text: "Robot cell stopped until you acknowledge" }
+    : { tone: "warn", text: "Robot cell stopped: no interlock signal" };
 }
 
 /** One alarm-history row as a short sentence. */

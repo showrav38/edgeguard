@@ -3,8 +3,9 @@
 // Every card has a fixed size and every button is always there (disabled when not usable), so
 // nothing moves when the machine state changes.
 import { IxButton } from "@siemens/ix-react";
-import { groupAlarms, groupSentence, headline, mainReason, PLAIN_ACTION, PLAIN_FAILURE, shownReading, type Light } from "../plain";
+import { groupAlarms, groupSentence, headline, mainReason, PLAIN_ACTION, PLAIN_FAILURE, robotLine, shownReading, type Light } from "../plain";
 import { formatDuration, type AlarmEvent, type LatchedAlarm, type View } from "../stream";
+import type { RobotStatus } from "../types";
 import { Card, GLOSSARY, Help, ICON, StateLabel, Waiting, type Tone } from "./ui";
 
 export const LIGHT_TONE: Record<Light, Tone> = { green: "ok", amber: "warn", red: "bad", off: "idle" };
@@ -32,8 +33,9 @@ export const canAck = (latched: LatchedAlarm | null, live: boolean, paused: bool
   !!latched && !latched.acknowledged && live && !paused;
 
 /** The traffic light, the one sentence and the Acknowledge button (always in the same place). */
-export function StatusHero({ view, live, paused, now, onAck }: {
+export function StatusHero({ view, robot, live, paused, now, onAck }: {
   view: View;
+  robot: RobotStatus | null;
   live: boolean;
   paused: boolean;
   now: number;
@@ -45,6 +47,7 @@ export function StatusHero({ view, live, paused, now, onAck }: {
   const tone = LIGHT_TONE[h.light];
   // The sentence already says "unusual conditions" when drift is the only thing going on.
   const showDrift = live && !!latest?.drift_warning && (!!latched || latest.state !== "OK");
+  const r = robotLine(robot, now);
   return (
     <section className={`card hero card-${tone}`} data-box="hero" aria-live="polite">
       <div className="lights" aria-hidden="true">
@@ -60,6 +63,8 @@ export function StatusHero({ view, live, paused, now, onAck }: {
         <p className="hero-note">
           {showDrift ? <StateLabel tone="warn">Unusual conditions: the prediction may be wrong.</StateLabel> : " "}
         </p>
+        {/* Robot cell (ROS 2 interlock, D-31/D-32): always this one line, only text and colour change. */}
+        <p className="hero-robot" data-box="hero-robot"><StateLabel tone={r.tone}>{r.text}</StateLabel></p>
       </div>
       <div className="hero-action">
         <IxButton data-box="ack-operator" className="btn-ack" variant={canAck(latched, live, paused) ? "primary" : "subtle-secondary"}

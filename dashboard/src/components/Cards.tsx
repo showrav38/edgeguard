@@ -5,6 +5,7 @@ import { IxButton } from "@siemens/ix-react";
 import { FAILURE_TYPES, pct, SIGNALS, signalValue } from "../format";
 import type { LatchedAlarm, View } from "../stream";
 import type { RobotStatus, Telemetry } from "../types";
+import { ROBOT_STALE_MS } from "../plain";
 import { canAck, latchLine } from "./Operator";
 import { Card, GLOSSARY, Help, ICON, StateLabel, Waiting, type Tone } from "./ui";
 
@@ -115,7 +116,6 @@ export function DataQuality({ m }: { m: Telemetry | null }) {
   );
 }
 
-const ROBOT_STALE_MS = 3000; // robot_sim publishes every 0.5 s
 
 /**
  * Robot cell (ROS 2, D-31): a simulated robot that loads parts into Machine 1. The ROS 2 node cell_guard stops it

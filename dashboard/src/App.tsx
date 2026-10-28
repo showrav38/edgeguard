@@ -49,7 +49,7 @@ export default function App() {
       <main className="content">
         {mode === "operator" ? (
           <div className="grid op">
-            <StatusHero view={view} live={edgeRunning} paused={paused} now={now} onAck={ack} />
+            <StatusHero view={view} robot={robot} live={edgeRunning} paused={paused} now={now} onAck={ack} />
             <WhatToDo view={view} live={edgeRunning} />
             <RiskGauge risk={edgeRunning ? view.latest?.risk ?? null : null} threshold={status?.threshold} costRatio={status?.cost_ratio} />
             <OperatorCharts points={view.points} threshold={status?.threshold} costRatio={status?.cost_ratio} />

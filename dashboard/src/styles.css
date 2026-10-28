@@ -118,7 +118,7 @@ ix-icon-button.help { flex: none; }
 .help-pop { max-width: 320px; }
 
 /* ---------- operator view ---------- */
-.hero { grid-column: 1 / -1; height: 176px; flex-direction: row; align-items: center; gap: var(--theme-space-4); }
+.hero { grid-column: 1 / -1; height: 204px; flex-direction: row; align-items: center; gap: var(--theme-space-4); }
 .lights { display: flex; flex-direction: column; gap: var(--theme-space-1); flex: none; padding: var(--theme-space-1);
           background: var(--theme-color-1); border-radius: var(--theme-default-border-radius); }
 .lamp { width: 24px; height: 24px; border-radius: 50%; background: var(--theme-color-3); }
@@ -129,6 +129,7 @@ ix-icon-button.help { flex: none; }
 .hero-sentence { font: var(--theme-h3); height: 30px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .hero-latch { font: var(--theme-body); color: var(--theme-color-soft-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hero-note { height: 20px; font: var(--theme-body); overflow: hidden; }
+.hero-robot { height: 20px; font: var(--theme-body); overflow: hidden; }
 .hero-action { display: flex; align-items: center; flex: none; }
 .btn-ack { width: 160px; }
 
@@ -239,15 +240,18 @@ th:first-child, td:first-child { text-align: left; }
   .view-toggle { order: 2; width: 100%; }
   .conn { width: 248px; }
   .btn-pause { width: 96px; }
-  .hero { height: 352px; flex-wrap: wrap; align-content: center; row-gap: var(--theme-space-3); }
+  .hero { height: 420px; flex-wrap: wrap; align-content: center; row-gap: var(--theme-space-3); }
   .hero-body { flex-basis: calc(100% - 64px); }
   .hero-sentence { white-space: normal; height: 120px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
-  .hero-latch { white-space: normal; height: 40px; }
+  .hero-latch { white-space: normal; height: 60px; } /* up to 3 lines at 390 px: never cut off (layout test) */
   .hero-note { height: 40px; }
   .hero-note .state-text { white-space: normal; }
+  .hero-robot { height: 40px; }
+  .hero-robot .state-text { white-space: normal; }
   .state-big .state-text { font: var(--theme-h2); }
   .hero-action { width: 100%; justify-content: flex-end; }
-  .todo { height: 256px; }
+  .todo { height: 304px; }
+  .todo-reason { -webkit-line-clamp: 4; } /* the longest reason (heat dissipation) needs 4 lines at 390 px (layout test) */
   .op .history { height: 304px; }
   .view-toggle ix-toggle-button { width: 50%; }
 
